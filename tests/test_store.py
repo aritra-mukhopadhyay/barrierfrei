@@ -71,6 +71,7 @@ def test_perception_cache_skips_judged_photos(tmp_path, segments):
     )
     store.save_matches(
         conn,
+        ["near", "far"],
         pd.DataFrame(
             {"photo_id": ["near", "far"], "segment_id": ["1-2-0", "1-2-0"], "distance_m": [1.0, 9.0]}
         ),
