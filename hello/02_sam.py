@@ -6,9 +6,9 @@ Try prompts like: stairs, curb, ramp, e-scooter, sidewalk.
 import re
 import sys
 
-from common import meta_client
+from common import image_data_uri, meta_client
 
-image_url = sys.argv[1]
+image_url = image_data_uri(sys.argv[1])
 prompt = sys.argv[2] if len(sys.argv) > 2 else "stairs"
 
 client = meta_client()

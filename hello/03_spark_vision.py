@@ -5,9 +5,9 @@ Run: python hello/03_spark_vision.py "<image url>"
 import json
 import sys
 
-from common import meta_client
+from common import image_data_uri, meta_client
 
-image_url = sys.argv[1]
+image_url = image_data_uri(sys.argv[1])
 
 PROMPT = """You check street photos for step-free accessibility.
 Return only JSON with these keys:
