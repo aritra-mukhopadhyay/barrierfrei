@@ -1,4 +1,8 @@
-from barrierfrei.sam import parse_output
+from types import SimpleNamespace
+
+import pytest
+
+from barrierfrei.sam import SamError, parse_output, segment
 
 # Shape taken from Meta's "Read SAM segmentation output" docs (mask payloads shortened).
 OUTPUT = (
@@ -17,3 +21,34 @@ def test_parse_output_reads_every_box():
 
 def test_parse_output_handles_no_match():
     assert parse_output("stairs", "") == []
+
+
+class _FakeStream:
+    def __init__(self, events):
+        self.events = events
+
+    def __enter__(self):
+        return iter(self.events)
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _client(*events):
+    stream = _FakeStream([SimpleNamespace(**e) for e in events])
+    return SimpleNamespace(responses=SimpleNamespace(stream=lambda **kw: stream))
+
+
+def test_segment_returns_detections_when_stream_completes():
+    client = _client(
+        {"type": "response.output_text.delta", "delta": OUTPUT},
+        {"type": "response.completed"},
+    )
+    assert len(segment(client, "sam", "data:", "curb")) == 2
+
+
+@pytest.mark.parametrize("last", [[{"type": "response.incomplete"}], [{"type": "response.failed"}], []])
+def test_segment_raises_when_stream_does_not_complete(last):
+    client = _client({"type": "response.output_text.delta", "delta": OUTPUT[:40]}, *last)
+    with pytest.raises(SamError):
+        segment(client, "sam", "data:", "curb")

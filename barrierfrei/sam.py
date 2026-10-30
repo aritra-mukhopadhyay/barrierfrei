@@ -8,6 +8,11 @@ from openai import OpenAI
 # Short noun phrases SAM looks for in every photo. Each phrase is one paid call.
 PROMPTS = ("stairs", "curb", "ramp", "e-scooter", "construction barrier")
 
+
+class SamError(RuntimeError):
+    """SAM did not finish its answer, so its detections cannot be trusted."""
+
+
 # One record per match: <object id><|box;x1=..;y1=..;x2=..;y2=..;w=..;h=..[;c=..]|>
 _BOX = re.compile(r"(\d+)<\|box;([^|]*)\|>")
 
@@ -37,6 +42,7 @@ def parse_output(prompt: str, text: str) -> list[Detection]:
 
 def segment(client: OpenAI, model: str, image_uri: str, prompt: str) -> list[Detection]:
     text = ""
+    status = None
     with client.responses.stream(
         model=model,
         input=[
@@ -53,4 +59,11 @@ def segment(client: OpenAI, model: str, image_uri: str, prompt: str) -> list[Det
         for event in stream:
             if event.type == "response.output_text.delta":
                 text += event.delta
+            elif event.type in ("response.completed", "response.failed", "response.incomplete"):
+                status = event.type
+            elif event.type == "error":
+                raise SamError(f"SAM stream error for {prompt!r}: {event.message}")
+    # A cut-off stream looks like "no detections"; raise so the photo stays unjudged and is retried.
+    if status != "response.completed":
+        raise SamError(f"SAM stream for {prompt!r} ended without completing ({status or 'no final event'})")
     return parse_output(prompt, text)
