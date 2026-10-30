@@ -19,3 +19,9 @@ def test_photo_matches_nearest_segment(segments):
 def test_far_photo_is_dropped(segments):
     photos = photos_to_gdf([photo("far", 8.6405, 49.8705)])  # ~55 m from both paths
     assert match_photos(segments, photos, max_distance_m=15).empty
+
+
+def test_no_photos_gives_empty_frame(segments):
+    photos = photos_to_gdf([])
+    assert photos.empty
+    assert match_photos(segments, photos, max_distance_m=15).empty

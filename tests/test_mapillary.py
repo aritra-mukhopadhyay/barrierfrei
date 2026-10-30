@@ -42,8 +42,10 @@ class FakeSession:
     def __init__(self):
         self.calls = 0
 
-    def get(self, url, params, timeout):
+    def get(self, url, headers, params, timeout):
         self.calls += 1
+        assert "access_token" not in params  # the token must never be in the URL
+        assert headers["Authorization"].startswith("OAuth ")
         return FakeResponse([ITEM])  # every tile returns the same photo
 
 
@@ -52,3 +54,23 @@ def test_fetch_photos_deduplicates_across_tiles():
     photos = mapillary.fetch_photos(session, "MLY|test", (8.628, 49.869, 8.653, 49.876))
     assert session.calls > 1
     assert [p.id for p in photos] == ["1"]
+
+
+class SaturatingSession:
+    """Returns a full page for the first (large) tile, then one photo per quarter."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def get(self, url, headers, params, timeout):
+        self.calls += 1
+        if self.calls == 1:
+            return FakeResponse([{**ITEM, "id": str(i)} for i in range(mapillary.PAGE_LIMIT)])
+        return FakeResponse([{**ITEM, "id": f"q{self.calls}"}])
+
+
+def test_saturated_tile_is_subdivided():
+    session = SaturatingSession()
+    items = mapillary._fetch_tile(session, "MLY|test", (8.640, 49.870, 8.645, 49.875))
+    assert session.calls == 5  # the full tile, then its four quarters
+    assert len(items) == 4
