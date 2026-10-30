@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv>=1.0,<2",
     "pydantic-settings>=2.4,<3",
     "osmnx>=2.0,<3",
+    "pillow>=10,<13",
 ]
 
 [project.optional-dependencies]

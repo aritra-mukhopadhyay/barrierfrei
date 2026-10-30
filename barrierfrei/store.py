@@ -7,7 +7,9 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
+from barrierfrei.judge import Judgement
 from barrierfrei.mapillary import Photo
+from barrierfrei.sam import Detection
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS segments (
@@ -33,6 +35,19 @@ CREATE TABLE IF NOT EXISTS segment_photos (
     photo_id TEXT NOT NULL REFERENCES photos(photo_id),
     distance_m REAL NOT NULL,
     PRIMARY KEY (segment_id, photo_id)
+);
+CREATE TABLE IF NOT EXISTS detections (
+    photo_id TEXT NOT NULL REFERENCES photos(photo_id),
+    prompt TEXT NOT NULL,
+    object_id INTEGER NOT NULL,
+    x1 INTEGER NOT NULL, y1 INTEGER NOT NULL, x2 INTEGER NOT NULL, y2 INTEGER NOT NULL,
+    PRIMARY KEY (photo_id, prompt, object_id)
+);
+CREATE TABLE IF NOT EXISTS judgements (
+    photo_id TEXT PRIMARY KEY REFERENCES photos(photo_id),
+    model TEXT NOT NULL,
+    judgement TEXT NOT NULL,     -- validated Judgement JSON
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 """
 
@@ -89,4 +104,35 @@ def save_matches(conn: sqlite3.Connection, matches: pd.DataFrame) -> None:
         conn.executemany(
             "INSERT OR REPLACE INTO segment_photos VALUES (?, ?, ?)",
             [(r.segment_id, r.photo_id, float(r.distance_m)) for r in matches.itertuples(index=False)],
+        )
+
+
+def photos_to_judge(conn: sqlite3.Connection, limit: int | None = None) -> list[tuple[str, str]]:
+    """Photos linked to a path that have not been judged yet, closest to their path first."""
+    sql = """
+        SELECT p.photo_id, p.thumb_url
+        FROM photos p
+        JOIN (SELECT photo_id, MIN(distance_m) AS d FROM segment_photos GROUP BY photo_id) sp USING (photo_id)
+        LEFT JOIN judgements j USING (photo_id)
+        WHERE j.photo_id IS NULL AND p.thumb_url IS NOT NULL AND p.is_pano = 0
+        ORDER BY sp.d
+    """
+    if limit is not None:
+        sql += " LIMIT ?"
+        return conn.execute(sql, (limit,)).fetchall()
+    return conn.execute(sql).fetchall()
+
+
+def save_perception(
+    conn: sqlite3.Connection, photo_id: str, detections: list[Detection], judgement: Judgement, model: str
+) -> None:
+    with conn:
+        conn.execute("DELETE FROM detections WHERE photo_id = ?", (photo_id,))
+        conn.executemany(
+            "INSERT INTO detections VALUES (?, ?, ?, ?, ?, ?, ?)",
+            [(photo_id, d.prompt, d.object_id, *d.box) for d in detections],
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO judgements (photo_id, model, judgement) VALUES (?, ?, ?)",
+            (photo_id, model, judgement.model_dump_json()),
         )
