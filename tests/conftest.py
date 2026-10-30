@@ -16,6 +16,7 @@ def segments() -> gpd.GeoDataFrame:
             "highway": ["footway", "steps"],
             "wheelchair": [None, "no"],
             "kerb": ["lowered", None],
+            "ramp:wheelchair": ["yes", None],
         },
         geometry=[
             LineString([(8.640, 49.870), (8.641, 49.870)]),

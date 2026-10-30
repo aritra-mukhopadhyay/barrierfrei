@@ -53,26 +53,43 @@ def tiles(bbox: tuple[float, float, float, float], step: float = TILE_DEG):
         lon += step
 
 
+MIN_TILE_DEG = 0.0002  # ~20 m; below this, accept a truncated tile instead of recursing forever
+
+
+def _fetch_tile(session: requests.Session, token: str, tile: tuple[float, float, float, float]) -> list[dict]:
+    resp = session.get(
+        API_URL,
+        # Token goes in a header, not the URL: URLs end up in exception messages and logs.
+        headers={"Authorization": f"OAuth {token}"},
+        params={"bbox": ",".join(f"{v:.6f}" for v in tile), "fields": FIELDS, "limit": PAGE_LIMIT},
+        timeout=DEFAULT_TIMEOUT,
+    )
+    resp.raise_for_status()
+    items = resp.json().get("data", [])
+    if len(items) < PAGE_LIMIT:
+        return items
+    min_lon, min_lat, max_lon, max_lat = tile
+    half_lon, half_lat = (max_lon - min_lon) / 2, (max_lat - min_lat) / 2
+    if half_lon < MIN_TILE_DEG:
+        log.warning("Tile %s still has %d+ photos at minimum size; keeping the first page", tile, PAGE_LIMIT)
+        return items
+    # Saturated tile: split it into four quarters and fetch each one.
+    mid_lon, mid_lat = min_lon + half_lon, min_lat + half_lat
+    quarters = [
+        (min_lon, min_lat, mid_lon, mid_lat),
+        (mid_lon, min_lat, max_lon, mid_lat),
+        (min_lon, mid_lat, mid_lon, max_lat),
+        (mid_lon, mid_lat, max_lon, max_lat),
+    ]
+    return [item for quarter in quarters for item in _fetch_tile(session, token, quarter)]
+
+
 def fetch_photos(
     session: requests.Session, token: str, bbox: tuple[float, float, float, float]
 ) -> list[Photo]:
     photos: dict[str, Photo] = {}
     for tile in tiles(bbox):
-        resp = session.get(
-            API_URL,
-            params={
-                "access_token": token,
-                "bbox": ",".join(f"{v:.6f}" for v in tile),
-                "fields": FIELDS,
-                "limit": PAGE_LIMIT,
-            },
-            timeout=DEFAULT_TIMEOUT,
-        )
-        resp.raise_for_status()
-        items = resp.json().get("data", [])
-        if len(items) >= PAGE_LIMIT:
-            log.warning("Tile %s hit the %d-photo limit; some photos are missing", tile, PAGE_LIMIT)
-        for item in items:
+        for item in _fetch_tile(session, token, tile):
             photo = parse_photo(item)
             if photo:
                 photos[photo.id] = photo  # tiles share edges, so de-duplicate by id

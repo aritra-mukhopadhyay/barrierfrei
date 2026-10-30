@@ -17,7 +17,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
 
-    segments = osm.walk_segments(settings.bbox)
+    segments, barrier_nodes = osm.walk_network(settings.bbox)
     photos = mapillary.fetch_photos(
         make_session(), require(settings.mapillary_token, "MAPILLARY_TOKEN"), settings.bbox
     )
@@ -26,7 +26,8 @@ def main() -> None:
     conn = store.connect(settings.db_path)
     store.save_segments(conn, segments, osm.ACCESS_TAGS)
     store.save_photos(conn, photos)
-    store.save_matches(conn, matches)
+    store.save_barrier_nodes(conn, barrier_nodes, osm.NODE_TAGS)
+    store.save_matches(conn, [p.id for p in photos], matches)
 
     covered = matches["segment_id"].nunique()
     log.info(
