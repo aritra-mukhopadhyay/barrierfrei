@@ -17,7 +17,7 @@ cp .env.example .env   # then fill in the four keys
 | Key | Where to get it |
 |---|---|
 | `MODEL_API_KEY` | dev.meta.ai dashboard, create an API key (hackathon credits) |
-| `MAPILLARY_TOKEN` | mapillary.com, log in, Dashboard, Developers, register an app, copy the **client token** (`MLY|...`) |
+| `MAPILLARY_TOKEN` | mapillary.com, log in, Dashboard, Developers, register an app, copy the **Access Token** (`MLY|...`); ignore the client secret |
 | `DB_CLIENT_ID`, `DB_API_KEY` | developers.deutschebahn.com, register, create an application, subscribe it to **FaSta - Station Facilities Status** (free plan) |
 
 ## Hello-world checks (run from the repo root)
