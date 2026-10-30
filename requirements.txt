@@ -1,3 +1,2 @@
-openai>=1.40
-requests
-python-dotenv
+# Kept for the hello/ scripts. The app itself installs with: pip install -e ".[dev]"
+-e .[dev]

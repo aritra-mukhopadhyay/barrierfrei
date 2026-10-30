@@ -8,7 +8,7 @@ elevator status. Built for the Meta Global AI Developer Hackathon (Oct 27 - Nov 
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+pip install -e ".[dev]"
 cp .env.example .env   # then fill in the four keys
 ```
 
@@ -31,3 +31,19 @@ python hello/05_fasta.py                           # Darmstadt Hbf elevator stat
 ```
 
 Each script prints a real result when its key works.
+
+## Pipeline
+
+| Step | Command | What it does |
+|---|---|---|
+| 1. Ingest | `python -m barrierfrei.ingest` | Downloads the OpenStreetMap walking network with accessibility tags and the Mapillary photos in the demo area, links each photo to its nearest path segment (within 15 m) and caches everything in `data/barrierfrei.sqlite`. |
+
+Settings (keys, demo bbox, model names) live in `barrierfrei/config.py` and can be overridden in `.env`,
+e.g. `BBOX=[8.628,49.869,8.653,49.876]`.
+
+## Development
+
+```bash
+ruff check . && ruff format --check .   # lint + formatting
+pytest -q                               # tests run offline, no keys or credits needed
+```

@@ -2,6 +2,7 @@
 
 Run: python hello/03_spark_vision.py "<image url>"
 """
+
 import json
 import sys
 
@@ -19,13 +20,15 @@ Return only JSON with these keys:
 client = meta_client()
 resp = client.chat.completions.create(
     model="muse-spark-1.3",
-    messages=[{
-        "role": "user",
-        "content": [
-            {"type": "text", "text": PROMPT},
-            {"type": "image_url", "image_url": {"url": image_url}},
-        ],
-    }],
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": PROMPT},
+                {"type": "image_url", "image_url": {"url": image_url}},
+            ],
+        }
+    ],
     response_format={"type": "json_object"},
 )
 print(json.dumps(json.loads(resp.choices[0].message.content), indent=2))

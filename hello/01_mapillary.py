@@ -3,8 +3,8 @@
 Run: python hello/01_mapillary.py
 Prints image ids, GPS points and photo URLs. Copy one URL for scripts 02 and 03.
 """
-import requests
 
+import requests
 from common import DEMO_BBOX, env
 
 resp = requests.get(

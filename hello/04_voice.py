@@ -4,16 +4,20 @@ Record yourself saying e.g. "I have a stroller, take me from Luisenplatz to the 
 then convert:  ffmpeg -i request.m4a -ac 1 -ar 24000 -c:a pcm_s16le -map_metadata -1 request.wav
 Run: python hello/04_voice.py request.wav
 """
+
 import json
 import sys
 
 import requests
-
 from common import META_BASE_URL, env
 
 wav_path = sys.argv[1]
-settings = {"mode": "PUSH_TO_TALK", "model": "muse-voice-transcribe-1.0", "audioEncoding": "WAV",
-            "languageBias": ["English", "German"]}
+settings = {
+    "mode": "PUSH_TO_TALK",
+    "model": "muse-voice-transcribe-1.0",
+    "audioEncoding": "WAV",
+    "languageBias": ["English", "German"],
+}
 
 with open(wav_path, "rb") as f:
     resp = requests.post(
