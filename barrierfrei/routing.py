@@ -39,6 +39,7 @@ MIN_PHOTO_CONFIDENCE = 0.7
 PHOTO_PENALTY_M = 400.0  # strong enough to detour around, weak enough to use if there is no other way
 MAX_SNAP_M = 150.0  # farther than this from any mapped street means we have no data there
 MAX_EXTRA_SNAP_M = 50.0  # how much farther than the nearest street a route may start or end
+ON_NODE_M = 5.0  # a point this close to a node is at that node (e.g. the top of a staircase)
 CUT_OFF_MARGIN_M = 10.0  # a point counts as cut off only if the nearest usable node is this much farther
 
 
@@ -259,7 +260,7 @@ def walk(
                 return None
             continue  # the walk then starts or ends at the snapped node itself, see below
         # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
-        if closest not in graph and snapped > closest_m + CUT_OFF_MARGIN_M:
+        if closest not in graph and (closest_m <= ON_NODE_M or snapped > closest_m + CUT_OFF_MARGIN_M):
             return None
         if snapped > closest_m + MAX_EXTRA_SNAP_M:
             return None

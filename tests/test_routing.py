@@ -155,3 +155,11 @@ def test_odd_node_a_few_metres_closer_does_not_cut_off_a_point():
     net.segments["b5"] = seg("b5", 2, 5, [B, net.node_coords[5]], highway="steps", length=4.0)
     route = routing.walk(net, routing.build_graph(net, "wheelchair"), near_b, A)
     assert route is not None and route.segment_ids == ["ab"]
+
+
+def test_door_at_top_of_a_short_staircase_is_still_cut_off():
+    E = (8.64107, 49.870)  # ~5 m east of B, up three steps
+    net = network()
+    net.segments["be"] = seg("be", 2, 5, [B, E], highway="steps", length=5.0)
+    net.node_coords[5] = E
+    assert routing.walk(net, routing.build_graph(net, "wheelchair"), A, E) is None
