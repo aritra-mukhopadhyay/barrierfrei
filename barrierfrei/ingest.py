@@ -35,6 +35,8 @@ def main() -> None:
     matches = match_photos(segments, photos_to_gdf(photos), settings.max_photo_distance_m)
 
     conn = store.connect(settings.db_path)
+    if removed := store.clear_area(conn, bbox):
+        log.info("Replacing %d existing segments in this area", removed)
     store.save_segments(conn, segments, osm.ACCESS_TAGS)
     store.save_photos(conn, photos)
     store.save_barrier_nodes(conn, barrier_nodes, osm.NODE_TAGS)

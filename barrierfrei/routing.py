@@ -33,7 +33,9 @@ ROUGH_SURFACES = {
     "sand",
     "dirt",
 }
+# OSM: "bad" still works for robust wheels (a heavy penalty); worse than that stops a wheelchair.
 BAD_SMOOTHNESS = {"bad", "very_bad", "horrible", "very_horrible", "impassable"}
+TOO_ROUGH_FOR_WHEELCHAIR = BAD_SMOOTHNESS - {"bad"}
 # A photo verdict only counts when the model is reasonably sure; it is evidence, not ground truth.
 MIN_PHOTO_CONFIDENCE = 0.7
 PHOTO_PENALTY_M = 400.0  # strong enough to detour around, weak enough to use if there is no other way
@@ -118,10 +120,11 @@ def segment_cost(
     if ROUGH_SURFACES & set(_values(tags.get("surface"))):
         cost *= 1.8 if profile in ("wheelchair", "stroller") else 1.3
         reasons.append("rough surface")
-    if BAD_SMOOTHNESS & set(_values(tags.get("smoothness"))):
-        if profile == "wheelchair":
-            return None, ["very uneven surface"]
-        cost *= 1.5
+    smoothness = set(_values(tags.get("smoothness")))
+    if profile == "wheelchair" and TOO_ROUGH_FOR_WHEELCHAIR & smoothness:
+        return None, ["very uneven surface"]
+    if BAD_SMOOTHNESS & smoothness:
+        cost *= 2.5 if profile == "wheelchair" else 1.5
         reasons.append("uneven surface")
 
     for verdict in judgements:
