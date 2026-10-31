@@ -135,3 +135,31 @@ def test_station_pin_above_stairs_snaps_to_nearest_step_free_spot():
     assert route is not None and route.segment_ids == ["ab"]
     assert route.coords[-1] == B and E not in route.coords  # the drawn walk stops before the stairs
     assert route.length_m == 100
+
+
+def test_bus_stop_tagged_wheelchair_no_is_not_a_wall():
+    # A stop_position on Luisenplatz: wheelchair=no means the bus isn't low-floor, not that the square is.
+    net = network()
+    net.barrier_nodes = {4: {"wheelchair": "no"}}
+    route = routing.walk(net, routing.build_graph(net, "wheelchair"), A, C)
+    assert route.segment_ids == ["ab", "bd", "dc"]
+    net.barrier_nodes = {4: {"barrier": "gate", "wheelchair": "no"}}  # a gate that is too narrow is
+    assert routing.walk(net, routing.build_graph(net, "wheelchair"), A, C) is None
+
+
+def test_odd_node_a_few_metres_closer_does_not_cut_off_a_point():
+    # The closest node (5) only has stairs, but a usable node (B) is barely farther: start there.
+    net = network()
+    near_b = (8.6410, 49.87035)  # ~39 m north of B
+    net.node_coords[5] = (8.64105, 49.87001)  # ~4 m from B and ~1 m closer to near_b
+    net.segments["b5"] = seg("b5", 2, 5, [B, net.node_coords[5]], highway="steps", length=4.0)
+    route = routing.walk(net, routing.build_graph(net, "wheelchair"), near_b, A)
+    assert route is not None and route.segment_ids == ["ab"]
+
+
+def test_door_at_top_of_a_short_staircase_is_still_cut_off():
+    E = (8.64107, 49.870)  # ~5 m east of B, up three steps
+    net = network()
+    net.segments["be"] = seg("be", 2, 5, [B, E], highway="steps", length=5.0)
+    net.node_coords[5] = E
+    assert routing.walk(net, routing.build_graph(net, "wheelchair"), A, E) is None
