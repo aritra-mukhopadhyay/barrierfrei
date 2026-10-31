@@ -39,6 +39,8 @@ MIN_PHOTO_CONFIDENCE = 0.7
 PHOTO_PENALTY_M = 400.0  # strong enough to detour around, weak enough to use if there is no other way
 MAX_SNAP_M = 150.0  # farther than this from any mapped street means we have no data there
 MAX_EXTRA_SNAP_M = 50.0  # how much farther than the nearest street a route may start or end
+ON_NODE_M = 5.0  # a point this close to a node is at that node (e.g. the top of a staircase)
+CUT_OFF_MARGIN_M = 10.0  # a point counts as cut off only if the nearest usable node is this much farther
 
 
 @dataclass(frozen=True)
@@ -137,7 +139,10 @@ def node_cost(tags: dict, profile: Profile) -> tuple[float | None, str | None]:
     kerb = _values(tags.get("kerb"))
     if "raised" in kerb:
         return (None, "raised kerb") if profile == "wheelchair" else (15.0, "raised kerb")
-    if "no" in _values(tags.get("wheelchair")) and profile == "wheelchair":
+    # On a point, wheelchair=no only blocks the way if the point is an obstacle (a gate, a crossing).
+    # On a bus stop or shop node it describes that venue, not whether you can roll past it.
+    obstacle = tags.get("barrier") or set(_values(tags.get("highway"))) & {"crossing", "elevator"}
+    if obstacle and "no" in _values(tags.get("wheelchair")) and profile == "wheelchair":
         return None, "tagged wheelchair=no"
     if "steps" in _values(tags.get("barrier")) or _values(tags.get("step_count")):
         return (None, "step") if profile in ("wheelchair", "stroller") else (10.0, "step")
@@ -255,7 +260,7 @@ def walk(
                 return None
             continue  # the walk then starts or ends at the snapped node itself, see below
         # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
-        if closest not in graph and closest_m < snapped:
+        if closest not in graph and (closest_m <= ON_NODE_M or snapped > closest_m + CUT_OFF_MARGIN_M):
             return None
         if snapped > closest_m + MAX_EXTRA_SNAP_M:
             return None
