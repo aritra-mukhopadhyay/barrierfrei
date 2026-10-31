@@ -158,3 +158,44 @@ def save_perception(
             "INSERT OR REPLACE INTO judgements (photo_id, model, judgement) VALUES (?, ?, ?)",
             (photo_id, model, judgement.model_dump_json()),
         )
+
+
+# OSM gives us free ground truth: a "steps" segment is not step-free, a plain footway usually is.
+_EVAL_FILTERS = {
+    "steps": "s.highway LIKE '%\"steps\"%'",
+    "footway": (
+        "(s.highway = '\"footway\"' OR s.highway = '\"pedestrian\"')"
+        " AND COALESCE(json_extract(s.tags, '$.wheelchair'), '') != 'no'"
+        " AND json_extract(s.tags, '$.step_count') IS NULL"
+    ),
+}
+
+
+def eval_sample(
+    conn: sqlite3.Connection, label: str, n: int, max_distance_m: float = 8.0
+) -> list[tuple[str, str, str]]:
+    """Up to n (photo_id, thumb_url, segment_id) for segments labelled `label`, one photo per segment.
+
+    Takes each segment's closest photo, since a nearer photo is more likely to actually show it.
+    """
+    sql = f"""
+        SELECT photo_id, thumb_url, segment_id FROM (
+            SELECT p.photo_id, p.thumb_url, s.segment_id,
+                   ROW_NUMBER() OVER (PARTITION BY s.segment_id ORDER BY sp.distance_m) AS rank,
+                   sp.distance_m
+            FROM segments s
+            JOIN segment_photos sp USING (segment_id)
+            JOIN photos p USING (photo_id)
+            WHERE {_EVAL_FILTERS[label]}
+              AND p.is_pano = 0 AND p.thumb_url IS NOT NULL AND sp.distance_m <= ?
+        )
+        WHERE rank = 1
+        ORDER BY distance_m, segment_id
+        LIMIT ?
+    """
+    return conn.execute(sql, (max_distance_m, n)).fetchall()
+
+
+def load_judgement(conn: sqlite3.Connection, photo_id: str) -> Judgement | None:
+    row = conn.execute("SELECT judgement FROM judgements WHERE photo_id = ?", (photo_id,)).fetchone()
+    return Judgement.model_validate_json(row[0]) if row else None

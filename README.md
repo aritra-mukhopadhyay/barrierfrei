@@ -38,6 +38,7 @@ Each script prints a real result when its key works.
 |---|---|---|
 | 1. Ingest | `python -m barrierfrei.ingest` | Downloads the OpenStreetMap walking network with accessibility tags and the Mapillary photos in the demo area, links each photo to its nearest path segment (within 15 m) and caches everything in `data/barrierfrei.sqlite`. |
 | 2. Perceive | `python -m barrierfrei.perceive --limit 30` | For each linked photo, SAM 3.1 looks for stairs, kerbs, ramps, e-scooters and construction barriers; Muse Spark then judges the photo with those boxes drawn on it and returns schema-validated JSON (barriers, who can pass, confidence). Results are cached, so re-runs only pay for new photos. |
+| 3. Evaluate | `python -m barrierfrei.evaluate --n 20` | Uses OpenStreetMap as ground truth: takes the closest photo of up to 20 `steps` segments and 20 plain footways, perceives any that aren't judged yet, and reports how many steps Spark flags as not wheelchair-passable (recall) and how many footways it wrongly flags. Writes `data/eval/report.csv` with Mapillary links so you can spot-check the labels. |
 
 Settings (keys, demo bbox, model names) live in `barrierfrei/config.py` and can be overridden in `.env`,
 e.g. `BBOX=[8.628,49.869,8.653,49.876]`.
