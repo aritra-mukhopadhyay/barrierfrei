@@ -133,3 +133,5 @@ def test_station_pin_above_stairs_snaps_to_nearest_step_free_spot():
     net.node_coords[5] = E
     route = routing.walk(net, routing.build_graph(net, "wheelchair"), A, E, exact_end=False)
     assert route is not None and route.segment_ids == ["ab"]
+    assert route.coords[-1] == B and E not in route.coords  # the drawn walk stops before the stairs
+    assert route.length_m == 100

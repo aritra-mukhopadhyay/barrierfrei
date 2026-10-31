@@ -253,12 +253,15 @@ def walk(
         if not exact:
             if snapped > MAX_SNAP_M:
                 return None
-            continue
+            continue  # the walk then starts or ends at the snapped node itself, see below
         # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
         if closest not in graph and closest_m < snapped:
             return None
         if snapped > closest_m + MAX_EXTRA_SNAP_M:
             return None
+    # A non-exact point is replaced by its step-free node, so the line never crosses the stairs.
+    start = start if exact_start else network.node_coords[source]
+    end = end if exact_end else network.node_coords[target]
     try:
         nodes = nx.shortest_path(graph, source, target, weight="cost")
     except nx.NetworkXNoPath:
