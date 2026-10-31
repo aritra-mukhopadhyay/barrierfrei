@@ -74,7 +74,18 @@ def _elevators(check):
     ]
 
 
-def _option_html(option: dict, best: bool) -> str:
+def _why_best(option: dict, others: list[dict]) -> str:
+    """Say why we recommend a trip that isn't the fastest; people will wonder."""
+    faster = [o["minutes"] for o in others if o["usable"] and o["minutes"] < option["minutes"]]
+    if faster and option["fully_verified"]:
+        return (
+            f"<br><small class='ok'>{option['minutes'] - min(faster)} min slower than the fastest option, "
+            "but DB's live data shows every lift on it working.</small>"
+        )
+    return ""
+
+
+def _option_html(option: dict, best: bool, why: str = "") -> str:
     rides = "".join(
         f"<li>{html.escape(r['line'] or 'Train')}: {html.escape(r['from'])} &rarr; {html.escape(r['to'])}"
         f" ({r['minutes']} min{', dep ' + r['departure'][11:16] if r['departure'] else ''})</li>"
@@ -94,11 +105,13 @@ def _option_html(option: dict, best: bool) -> str:
     ):
         if w:
             notes = f" <small>({html.escape(', '.join(w['notes']))})</small>" if w["notes"] else ""
-            walks.append(f"<li>{label}: {w['metres']} m{notes}</li>")
+            walks.append(f"<li>{label}: {w['metres']} m, about {w['minutes']} min{notes}</li>")
     for t in option["transfer_walks"]:
         walks.insert(
             1,
-            f"<li class='{t['status']}'>Walk {html.escape(t['from'])} &rarr; {html.escape(t['to'])}: {t['status']}</li>",
+            f"<li class='{t['status']}'>Walk {html.escape(t['from'])} &rarr; {html.escape(t['to'])}: "
+            + (f"{t['route']['metres']} m, about {t['route']['minutes']} min" if t["route"] else t["status"])
+            + "</li>",
         )
     problems = "".join(f"<li class='broken'>{html.escape(p)}</li>" for p in option["problems"])
     avoided = option["avoided_on_shortest_path"]
@@ -108,7 +121,7 @@ def _option_html(option: dict, best: bool) -> str:
     if option["usable"] and not option["fully_verified"]:
         head += " <small class='unverified'>(some lifts can't be checked live)</small>"
     return (
-        f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min"
+        f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min{why}"
         f"<br><small>{html.escape(option['timetable'])}</small>"
         f"<ul>{''.join(walks[:1])}{rides}{''.join(walks[1:])}</ul><b>Elevators</b><ul>{checks}</ul><ul>{problems}</ul>{avoided_html}</div>"
     )
@@ -136,7 +149,11 @@ def render(result: dict, options: list, origin, destination) -> str:
             "direct": best.direct_walk[1:],
         }
     best_index = options.index(best) if best else -1
-    panel = "".join(_option_html(o, i == best_index and o["usable"]) for i, o in enumerate(result["options"]))
+    shown = result["options"]
+    panel = "".join(
+        _option_html(o, i == best_index and o["usable"], _why_best(o, shown) if i == best_index else "")
+        for i, o in enumerate(shown)
+    )
     if not result["options"]:
         panel = "<p>No journeys found.</p>"
     return PAGE.format(
