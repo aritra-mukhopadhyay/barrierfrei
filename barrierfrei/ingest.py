@@ -17,7 +17,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
 
-    segments, barrier_nodes = osm.walk_network(settings.bbox)
+    segments, barrier_nodes = osm.walk_network(settings.bbox, settings.data_dir / "osmnx")
     photos = mapillary.fetch_photos(
         make_session(), require(settings.mapillary_token, "MAPILLARY_TOKEN"), settings.bbox
     )
