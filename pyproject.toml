@@ -18,6 +18,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.6"]
+offline = ["osmium>=4,<5"]  # osm_extract: build the street network from a .osm.pbf without Overpass
 
 [tool.setuptools.packages.find]
 include = ["barrierfrei*"]

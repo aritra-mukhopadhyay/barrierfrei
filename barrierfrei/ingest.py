@@ -2,10 +2,12 @@
 
 Run: python -m barrierfrei.ingest --area darmstadt   (or --area frankfurt)
 Areas add up in the same database, so ingest each area you want to route in.
+If Overpass is down, cut the area from a downloaded extract first (see osm_extract) and pass --osm-file.
 """
 
 import argparse
 import logging
+from pathlib import Path
 
 from barrierfrei import mapillary, osm, store
 from barrierfrei.config import AREAS, get_settings, require
@@ -18,12 +20,15 @@ log = logging.getLogger("barrierfrei.ingest")
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--area", choices=sorted(AREAS), help="named area; default is the BBOX setting")
+    parser.add_argument(
+        "--osm-file", type=Path, help="read streets from this OSM XML (see osm_extract) instead of Overpass"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
     bbox = AREAS[args.area] if args.area else settings.bbox
 
-    segments, barrier_nodes = osm.walk_network(bbox, settings.data_dir / "osmnx")
+    segments, barrier_nodes = osm.walk_network(bbox, settings.data_dir / "osmnx", args.osm_file)
     photos = mapillary.fetch_photos(
         make_session(), require(settings.mapillary_token, "MAPILLARY_TOKEN"), bbox
     )
