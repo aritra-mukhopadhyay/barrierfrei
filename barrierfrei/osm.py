@@ -80,7 +80,7 @@ def walk_network(
     else:
         # Walking works both ways along a one-way street, hence bidirectional.
         graph = ox.graph_from_xml(osm_file, bidirectional=True, simplify=False, retain_all=True)
-        graph = ox.truncate.truncate_graph_bbox(graph, bbox, truncate_by_edge=True)
+        graph = ox.truncate.truncate_graph_bbox(graph, bbox)  # same as graph_from_bbox
         graph = ox.truncate.largest_component(graph)  # same as retain_all=False above
     # Simplification would merge away mid-street nodes; keep any node with a barrier-type tag.
     graph = ox.simplify_graph(graph, node_attrs_include=BARRIER_NODE_KEYS)
