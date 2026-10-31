@@ -34,6 +34,19 @@ ACCESS_TAGS = [
 # Node tags that mark obstacles at a point, e.g. a raised kerb at a crossing.
 NODE_TAGS = ["barrier", "kerb", "highway", "crossing", "wheelchair", "step_count", "tactile_paving"]
 BARRIER_NODE_KEYS = ["barrier", "kerb", "wheelchair", "step_count"]
+# Never merge two ways into one segment across a change in these: one bad stretch would otherwise
+# give its tag to the whole merged segment (a 15 m rough patch blocking a 160 m forecourt).
+SPLIT_ON = [
+    "highway",
+    "surface",
+    "smoothness",
+    "incline",
+    "wheelchair",
+    "step_count",
+    "kerb",
+    "ramp",
+    "ramp:wheelchair",
+]
 
 
 # The same rules osmnx sends to Overpass for network_type="walk", for filtering an offline extract.
@@ -83,7 +96,7 @@ def walk_network(
         graph = ox.truncate.truncate_graph_bbox(graph, bbox)  # same as graph_from_bbox
         graph = ox.truncate.largest_component(graph)  # same as retain_all=False above
     # Simplification would merge away mid-street nodes; keep any node with a barrier-type tag.
-    graph = ox.simplify_graph(graph, node_attrs_include=BARRIER_NODE_KEYS)
+    graph = ox.simplify_graph(graph, node_attrs_include=BARRIER_NODE_KEYS, edge_attrs_differ=SPLIT_ON)
     nodes, edges = ox.graph_to_gdfs(graph)
     edges = edges.reset_index()
     edges["segment_id"] = (
