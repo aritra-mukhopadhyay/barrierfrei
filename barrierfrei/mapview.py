@@ -47,10 +47,10 @@ function draw(id, part) {{
       .bindPopup(`<b>Elevator ${{e.equipment}}</b><br>${{e.description}}<br>${{e.state}}${{e.used ? "<br><b>use this one</b>" : ""}}`).addTo(map);
   }});
   part.markers.forEach(m => {{ L.marker(ll(m.at)).bindPopup(m.label).addTo(map); bounds.push(L.latLng(ll(m.at))); }});
+  map.invalidateSize();  // the container may only now have its final size
   map.fitBounds(L.latLngBounds(bounds).pad(0.2));
 }}
-draw("start", data.start);
-draw("end", data.end);
+window.addEventListener("load", () => {{ draw("start", data.start); draw("end", data.end); }});
 </script>
 </body></html>
 """
@@ -81,7 +81,7 @@ def _option_html(option: dict, best: bool) -> str:
         for r in option["rides"]
     )
     checks = "".join(
-        f"<li class='{s['status']}'>{html.escape(s['name'])}"
+        f"<li class='{s['status']}'>{html.escape(s['role'].capitalize() + ': ') if s['role'] else ''}{html.escape(s['name'])}"
         f"{' platform ' + html.escape(s['platform']) if s['platform'] else ''}: {s['status']}"
         f"{' (' + html.escape(s['reason']) + ')' if s['reason'] else ''}"
         f"{'<br><small>Use: ' + html.escape(' then '.join(s['elevators_to_use'])) + '</small>' if s['elevators_to_use'] else ''}</li>"
@@ -105,6 +105,8 @@ def _option_html(option: dict, best: bool) -> str:
     avoided_html = f"<p><small>Avoided: {html.escape(', '.join(avoided))}</small></p>" if avoided else ""
     cls = "opt best" if best else ("opt" if option["usable"] else "opt bad")
     head = "Recommended" if best else ("Alternative" if option["usable"] else "Not step-free right now")
+    if option["usable"] and not option["fully_verified"]:
+        head += " <small class='unverified'>(some lifts can't be checked live)</small>"
     return (
         f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min"
         f"<br><small>{html.escape(option['timetable'])}</small>"

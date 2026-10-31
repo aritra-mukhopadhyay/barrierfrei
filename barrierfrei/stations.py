@@ -86,7 +86,7 @@ def fetch_station(
 ) -> Station:
     cache = cache_dir / f"{number}.json"
     if cache.exists() and time.time() - cache.stat().st_mtime < CACHE_TTL_S:
-        return parse_station(json.loads(cache.read_text()), cache.stat().st_mtime)
+        return parse_station(json.loads(cache.read_text(encoding="utf-8")), cache.stat().st_mtime)
     try:
         resp = session.get(
             FASTA_URL.format(number=number),
@@ -98,10 +98,12 @@ def fetch_station(
     except requests.RequestException as err:
         if cache.exists():  # better a slightly old answer, clearly labelled, than none
             log.warning("FaSta unavailable for %s (%s); using cached status", number, err)
-            return parse_station(json.loads(cache.read_text()), cache.stat().st_mtime, stale=True)
+            return parse_station(
+                json.loads(cache.read_text(encoding="utf-8")), cache.stat().st_mtime, stale=True
+            )
         raise
     cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(data))
+    cache.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
     return parse_station(data, time.time())
 
 

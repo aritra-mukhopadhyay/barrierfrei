@@ -36,8 +36,9 @@ ROUGH_SURFACES = {
 BAD_SMOOTHNESS = {"bad", "very_bad", "horrible", "very_horrible", "impassable"}
 # A photo verdict only counts when the model is reasonably sure; it is evidence, not ground truth.
 MIN_PHOTO_CONFIDENCE = 0.7
-PHOTO_PENALTY_M = 400.0
-MAX_EXTRA_SNAP_M = 50.0  # how much farther than the nearest street a route may start or end  # strong enough to detour around, weak enough to use if there is no other way
+PHOTO_PENALTY_M = 400.0  # strong enough to detour around, weak enough to use if there is no other way
+MAX_SNAP_M = 150.0  # farther than this from any mapped street means we have no data there
+MAX_EXTRA_SNAP_M = 50.0  # how much farther than the nearest street a route may start or end
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,8 @@ def walk(
         closest = min(network.node_coords, key=lambda n: haversine_m(network.node_coords[n], point))
         snapped = haversine_m(network.node_coords[node], point)
         closest_m = haversine_m(network.node_coords[closest], point)
+        if closest_m > MAX_SNAP_M:  # no street data here at all (area not ingested)
+            return None
         # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
         if closest not in graph and closest_m < snapped:
             return None
@@ -283,6 +286,6 @@ def avoided(network: Network, accessible: WalkRoute, direct: WalkRoute) -> list[
             continue
         seg = network.segments[segment_id]
         cost, reasons = segment_cost(seg, profile, network.judgements.get(segment_id, []))
-        if cost is None or reasons:
-            found.extend(r for r in reasons if r not in found)
+        # Only claim what the chosen route really avoids, not what it still crosses elsewhere.
+        found.extend(r for r in reasons if r not in found and r not in accessible.notes)
     return found

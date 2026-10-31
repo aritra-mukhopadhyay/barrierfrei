@@ -41,6 +41,11 @@ class StationCheck:
     use: list[stations.Elevator] = field(default_factory=list)  # every lift on the way, platform first
     elevators: list[stations.Elevator] = field(default_factory=list)  # all elevators, for the map
     street_entrance: bool = False  # is use[-1] the street-level lift we can walk to?
+    role: str = ""  # board, alight, change (arrive) or change (depart)
+
+    @property
+    def verified(self) -> bool:
+        return self.status == "ok"
 
 
 @dataclass
@@ -71,6 +76,11 @@ class Option:
             and self.walk_end is not None
             and not self.problems
         )
+
+    @property
+    def verified(self) -> bool:
+        """Every lift and walk on the trip was checked against live or map data."""
+        return all(c.verified for c in self.checks) and all(t.status == "ok" for t in self.transfer_walks)
 
     @property
     def minutes(self) -> float:
@@ -127,8 +137,11 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
 
 def entrance(check: StationCheck) -> tuple[float, float] | None:
     """Where to walk to or from: the street-level lift if we know it, else the station itself."""
-    if check.street_entrance and check.use and check.use[-1].lon is not None:
-        return (check.use[-1].lon, check.use[-1].lat)
+    lift = check.use[-1] if check.use else None
+    # A platform lift picked without knowing the platform is a guess: walk to the station instead.
+    known = lift is not None and (not lift.tracks or check.platform is not None)
+    if check.street_entrance and known and lift.lon is not None:
+        return (lift.lon, lift.lat)
     stop = transit.find_stop(check.name)
     return (stop.lon, stop.lat) if stop else None
 
@@ -138,6 +151,7 @@ def check_journey(
 ) -> tuple[list[StationCheck], list[TransferWalk]]:
     rides = journey.rides
     checks = [check_station(rides[0].origin, rides[0].origin_platform, lookup)]
+    checks[0].role = "board"
     walks = []
     for before, after in zip(rides, rides[1:], strict=False):
         same_station = transit.normalise(before.destination) == transit.normalise(after.origin)
@@ -146,6 +160,7 @@ def check_journey(
             check_station(before.destination, before.destination_platform, lookup, transfer=same_station)
         )
         checks.append(check_station(after.origin, after.origin_platform, lookup, transfer=same_station))
+        checks[-2].role, checks[-1].role = "change (arrive)", "change (depart)"
         if not same_station:
             a, b = (transit.find_stop(n) for n in (before.destination, after.origin))
             ends = [(s.lon, s.lat) for s in (a, b) if s]
@@ -162,6 +177,7 @@ def check_journey(
             else:
                 walks.append(TransferWalk(before.destination, after.origin, None, "unverified"))
     checks.append(check_station(rides[-1].destination, rides[-1].destination_platform, lookup))
+    checks[-1].role = "alight"
     return checks, walks
 
 
@@ -209,13 +225,43 @@ def plan(
                                 if x not in option.avoided
                             ]
                             option.direct_walk.append(direct.coords)
+                for label, point in (
+                    ("start", origin),
+                    ("station", board),
+                    ("station", alight),
+                    ("destination", destination),
+                ):
+                    if point and not routing.covered(network, point):
+                        msg = f"no street data near the {label}; run ingest for that area"
+                        if msg not in option.problems:
+                            option.problems.append(msg)
+                if board and alight and not option.problems:
+                    for label, route in (
+                        ("to the station", option.walk_start),
+                        ("from the station", option.walk_end),
+                    ):
+                        if route is None:
+                            option.problems.append(f"no step-free walk found {label}")
                 departure = journey.rides[0].departure
                 if departure and option.walk_start:
                     arrive = now + timedelta(minutes=option.walk_start.cost / 60 + BOARDING_BUFFER_MIN)
                     if departure < arrive:
                         option.problems.append("the train leaves before you can reach the platform")
                 options.append(option)
-    return sorted(options, key=lambda o: (not o.usable, o.minutes))
+    return rank(options)
+
+
+def rank(options: list[Option]) -> list[Option]:
+    """Usable first; among those, a slower trip we could fully verify beats a faster one we couldn't."""
+    return sorted(options, key=lambda o: (not o.usable, not o.verified, o.minutes))
+
+
+def lift_text(check: StationCheck, lift: stations.Elevator) -> str:
+    if lift.tracks and check.platform is None:
+        platform_lifts = [e for e in check.elevators if e.tracks]
+        working = sum(e.working for e in platform_lifts)
+        return f"the lift to your platform ({working} of {len(platform_lifts)} platform lifts working)"
+    return lift.description or f"lift {lift.equipment}"
 
 
 def summary(options: list[Option], profile: str) -> dict:
@@ -229,6 +275,7 @@ def summary(options: list[Option], profile: str) -> dict:
         "options": [
             {
                 "usable": o.usable,
+                "fully_verified": o.verified,
                 "minutes": round(o.minutes),
                 "timetable": o.journey.source,
                 "rides": [
@@ -247,7 +294,8 @@ def summary(options: list[Option], profile: str) -> dict:
                         "platform": c.platform,
                         "status": c.status,
                         "reason": c.reason,
-                        "elevators_to_use": [e.description or f"lift {e.equipment}" for e in c.use],
+                        "role": c.role,
+                        "elevators_to_use": [lift_text(c, e) for e in c.use],
                     }
                     for c in o.checks
                 ],
@@ -319,7 +367,7 @@ def main() -> None:
     if args.transit == "static":
         provider = transit.Static()
     else:
-        provider = transit.DbRest(session) if args.transit == "live" else transit.Auto(session)
+        provider = transit.DbRest(session) if args.transit == "live" else transit.Auto()
     client_id = require(settings.db_client_id, "DB_CLIENT_ID")
     api_key = require(settings.db_api_key, "DB_API_KEY")
     outages = set(args.out_of_service)
@@ -337,7 +385,7 @@ def main() -> None:
     result |= {"from": origin_name, "to": dest_name}
     out = settings.data_dir / "plans"
     out.mkdir(parents=True, exist_ok=True)
-    (out / "plan.json").write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    (out / "plan.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
 
     from barrierfrei import mapview
 
@@ -348,10 +396,12 @@ def main() -> None:
         log.error("No journeys found between %s and %s", origin_name, dest_name)
     for i, option in enumerate(result["options"], 1):
         rides = ", ".join(f"{r['line']} {r['from']} -> {r['to']}" for r in option["rides"])
-        flag = "OK " if option["usable"] else "NO "
+        flag = ("OK " if option["fully_verified"] else "OK?") if option["usable"] else "NO "
         log.info("%s option %d: %d min, %s", flag, i, option["minutes"], rides)
         for s in option["stations"]:
-            log.info("      %s: %s %s", s["name"], s["status"], s["reason"])
+            log.info("      %s %s: %s %s", s["role"], s["name"], s["status"], s["reason"])
+        for problem in option["problems"]:
+            log.info("      problem: %s", problem)
     if result["options"] and result["options"][0]["avoided_on_shortest_path"]:
         log.info("Avoided on the walk: %s", ", ".join(result["options"][0]["avoided_on_shortest_path"]))
     log.info("Map: %s", Path(out / "plan.html").resolve())

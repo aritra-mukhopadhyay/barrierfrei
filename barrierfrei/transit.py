@@ -141,8 +141,8 @@ def parse_db_rest(data: dict) -> list[Journey]:
 
 
 class DbRest:
-    def __init__(self, session: requests.Session):
-        self.session = session
+    def __init__(self, session: requests.Session, timeout: float = DEFAULT_TIMEOUT):
+        self.session, self.timeout = session, timeout
 
     def journeys(
         self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
@@ -162,7 +162,7 @@ class DbRest:
                 "to.longitude": destination.lon,
                 "to.address": destination.name,
             }
-        resp = self.session.get(f"{DB_REST_URL}/journeys", params=params, timeout=DEFAULT_TIMEOUT)
+        resp = self.session.get(f"{DB_REST_URL}/journeys", params=params, timeout=self.timeout)
         resp.raise_for_status()
         return parse_db_rest(resp.json())
 
@@ -208,16 +208,21 @@ class Static:
 class Auto:
     """Live timetable when reachable, static fallback otherwise, so a demo never dead-ends."""
 
-    def __init__(self, session: requests.Session):
-        self.live, self.static = DbRest(session), Static()
+    def __init__(self, session: requests.Session | None = None):
+        # A free public API may be down for hours: fail fast (no retries, short timeout) and,
+        # after the first failure, stop asking for the rest of this run (a circuit breaker).
+        self.live, self.static = DbRest(session or requests.Session(), timeout=8), Static()
+        self.live_down = False
 
     def journeys(
         self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
     ) -> list[Journey]:
-        try:
-            found = self.live.journeys(origin, destination, results, departure)
-            if found:
-                return found
-        except (requests.RequestException, ValueError) as err:
-            log.warning("Live timetable unavailable (%s); using the typical timetable", err)
+        if not self.live_down:
+            try:
+                found = self.live.journeys(origin, destination, results, departure)
+                if found:
+                    return found
+            except (requests.RequestException, ValueError) as err:
+                self.live_down = True
+                log.warning("Live timetable unavailable (%s); using the typical timetable", err)
         return self.static.journeys(origin, destination, results, departure)

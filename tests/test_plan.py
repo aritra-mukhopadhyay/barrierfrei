@@ -213,3 +213,44 @@ def test_walk_between_two_stations_is_checked():
     ]
     (option,) = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Timed(t(30), legs), lookup_with(), now)
     assert [w.status for w in option.transfer_walks] == ["unverified"]  # outside the mapped streets
+
+
+def test_unknown_platform_names_no_specific_lift():
+    check = plan.check_station("Darmstadt Hbf", None, lookup_with())
+    assert plan.lift_text(check, check.use[0]) == "the lift to your platform (1 of 1 platform lifts working)"
+    stop = transit.find_stop("Darmstadt Hbf")
+    assert plan.entrance(check) == (stop.lon, stop.lat)  # don't walk to a lift that may be the wrong one
+
+
+def test_station_roles_are_labelled():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    via_hbf = _via_hbf(options)
+    assert [c.role for c in via_hbf.checks] == ["board", "change (arrive)", "change (depart)", "alight"]
+
+
+def test_verified_trip_ranks_above_faster_unverified_one():
+    def option(minutes, status):
+        leg = transit.Leg("suburban", "S3", "a", "b", None, None, None, None, minutes)
+        walk = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        return plan.Option(
+            transit.Journey([leg], "test"),
+            [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, status)],
+            walk_start=walk,
+            walk_end=walk,
+        )
+
+    fast_unverified, slow_verified = option(20, "unverified"), option(40, "ok")
+    assert plan.rank([fast_unverified, slow_verified]) == [slow_verified, fast_unverified]
+
+
+def test_destination_outside_the_mapped_area_is_explained():
+    far = (8.70, 50.20)  # ~10 km north of anything in the test network
+    options = plan.plan(ORIGIN, far, "wheelchair", network(), transit.Static(), lookup_with())
+    assert options == []  # no station near it either
+    net = network()
+    del net.segments["h-z"]
+    for n in (10, 11):
+        del net.node_coords[n]
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", net, transit.Static(), lookup_with())
+    assert options and not any(o.usable for o in options)
+    assert "no street data near the destination; run ingest for that area" in options[0].problems

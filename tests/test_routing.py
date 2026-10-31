@@ -106,3 +106,20 @@ def test_connector_hops_count_as_walking_cost():
     near_a = (8.6400, 49.8701)  # ~11 m north of A
     route = routing.walk(net, routing.build_graph(net, None), near_a, B)
     assert route.segment_ids == ["ab"] and route.cost > 100 + 10
+
+
+def test_no_route_into_an_area_we_have_no_streets_for():
+    net = network()
+    frankfurt = (8.6826, 50.1144)  # ~28 km away: snapping there would invent a 28 km walk
+    assert routing.walk(net, routing.build_graph(net, None), A, frankfurt) is None
+    assert not routing.covered(net, frankfurt) and routing.covered(net, A)
+
+
+def test_avoided_does_not_claim_what_the_route_still_crosses():
+    net = network()
+    net.segments["bd"] = seg("bd", 2, 4, [B, D], surface="cobblestone")
+    net.segments["bc"] = seg("bc", 2, 3, [B, C], highway="steps", length=20.0, surface="cobblestone")
+    accessible = routing.walk(net, routing.build_graph(net, "wheelchair"), A, C)
+    direct = routing.walk(net, routing.build_graph(net, None), A, C)
+    assert "rough surface" in accessible.notes
+    assert routing.avoided(net, accessible, direct) == ["stairs"]

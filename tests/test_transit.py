@@ -80,3 +80,20 @@ def test_live_journey_minutes_include_waiting():
 
     journey = transit.Journey([leg(0, 10), leg(30, 40)], "test")
     assert journey.minutes == 40
+
+
+def test_auto_stops_asking_a_dead_api():
+    import requests
+
+    calls = []
+
+    class Down:
+        def get(self, *args, **kwargs):
+            calls.append(1)
+            raise requests.ConnectionError("down")
+
+    auto = transit.Auto(Down())
+    darmstadt = transit.find_stop("Darmstadt Hbf")
+    for name in ("Frankfurt (Main) Hauptwache", "Frankfurt (Main) Konstablerwache"):
+        assert auto.journeys(darmstadt, transit.find_stop(name))
+    assert len(calls) == 1  # the circuit breaker kept the second lookup instant
