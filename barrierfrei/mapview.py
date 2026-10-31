@@ -122,11 +122,11 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     if best and not option["fully_verified"]:
         head = "Best we can offer"
         why += (
-            "<br><small class='unverified'>No trip right now has every lift confirmed in live data; "
-            "check the unconfirmed lifts before you go.</small>"
+            "<br><small class='unverified'>No trip right now is fully confirmed (every lift in live "
+            "data and every walk on our map); check the parts marked unverified before you go.</small>"
         )
     elif option["usable"] and not option["fully_verified"]:
-        head += " <small class='unverified'>(some lifts can't be checked live)</small>"
+        head += " <small class='unverified'>(some parts can't be checked)</small>"
     return (
         f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min{why}"
         f"<br><small>{html.escape(option['timetable'])}</small>"

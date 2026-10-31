@@ -335,4 +335,4 @@ def test_panel_says_when_no_trip_is_fully_confirmed():
     result = plan.summary(options, "wheelchair") | {"from": "a", "to": "b"}
     assert not any(o["fully_verified"] for o in result["options"] if o["usable"])
     page = mapview.render(result, options, ORIGIN, ZEIL)
-    assert "Best we can offer" in page and "No trip right now has every lift confirmed" in page
+    assert "Best we can offer" in page and "No trip right now is fully confirmed" in page
