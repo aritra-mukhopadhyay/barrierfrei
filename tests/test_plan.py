@@ -1,0 +1,256 @@
+from barrierfrei import mapview, plan, stations, transit
+from barrierfrei.routing import Network, Segment
+
+ORIGIN = (8.6400, 49.8726)  # in Darmstadt, ~760 m east of the Hbf
+DARMSTADT_LIFT = (8.6300911, 49.8725678)
+MID = (8.6350, 49.8726)
+HAUPTWACHE_LIFT = (8.67818, 50.114046)
+ZEIL = (8.6826, 50.1144)
+
+FASTA = {
+    1126: {
+        "stationnumber": 1126,
+        "facilities": [
+            {
+                "equipmentnumber": 10543453,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "zu Gleis 3/4",
+                "geocoordX": DARMSTADT_LIFT[0],
+                "geocoordY": DARMSTADT_LIFT[1],
+            }
+        ],
+    },
+    1866: {
+        "stationnumber": 1866,
+        "facilities": [
+            {
+                "equipmentnumber": 10561326,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "Querbahnsteig <-> Gl.101/102",
+                "geocoordX": 8.6628995,
+                "geocoordY": 50.1072933,
+            },
+            {
+                "equipmentnumber": 10955285,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "Bahnhofsvorplatz <-> B-Ebene",
+                "geocoordX": 8.662759,
+                "geocoordY": 50.108021,
+            },
+        ],
+    },
+    1864: {
+        "stationnumber": 1864,
+        "facilities": [
+            {
+                "equipmentnumber": 10351032,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "zu Gleis 2/3 (S-Bahn)",
+                "geocoordX": HAUPTWACHE_LIFT[0],
+                "geocoordY": HAUPTWACHE_LIFT[1],
+            }
+        ],
+    },
+    1865: {"stationnumber": 1865, "facilities": []},
+    1857: {"stationnumber": 1857, "facilities": []},
+}
+
+
+def network() -> Network:
+    segments = [
+        Segment("o-m", 1, 2, 370, "footway", {}, [ORIGIN, MID]),
+        Segment("m-d", 2, 3, 360, "footway", {}, [MID, DARMSTADT_LIFT]),
+        Segment("h-z", 10, 11, 330, "pedestrian", {}, [HAUPTWACHE_LIFT, ZEIL]),
+    ]
+    coords = {1: ORIGIN, 2: MID, 3: DARMSTADT_LIFT, 10: HAUPTWACHE_LIFT, 11: ZEIL}
+    return Network({s.segment_id: s for s in segments}, coords)
+
+
+def lookup_with(outages=frozenset()):
+    def lookup(number):
+        return stations.with_outages(stations.parse_station(FASTA[number], 0), set(outages))
+
+    return lookup
+
+
+def test_plan_picks_fastest_trip_with_working_elevators():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    best = options[0]
+    assert best.usable
+    assert [r.destination for r in best.journey.rides][-1] == "Frankfurt (Main) Hauptwache"
+    assert [c.status for c in best.checks][0] == "ok"
+    assert best.walk_start.segment_ids == ["o-m", "m-d"]
+    assert best.walk_end.segment_ids == ["h-z"]
+    # Konstablerwache's lifts are not in DB's data: never "broken", only "unverified".
+    konst = [o for o in options if o.checks[-1].name.endswith("Konstablerwache")]
+    assert konst and konst[0].checks[-1].status == "unverified"
+
+
+def test_broken_elevator_rejects_every_trip_through_it():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with({10351032}))
+    through_hauptwache = [o for o in options if o.checks[-1].name.endswith("Hauptwache")]
+    assert through_hauptwache and not any(o.usable for o in through_hauptwache)
+    assert all(o.checks[-1].status == "broken" for o in through_hauptwache)
+
+
+def test_summary_and_map_render():
+    options = plan.plan(ORIGIN, ZEIL, "stroller", network(), transit.Static(), lookup_with())
+    result = plan.summary(options, "stroller") | {"from": "A", "to": "B"}
+    assert result["options"][0]["usable"]
+    page = mapview.render(result, options, ORIGIN, ZEIL)
+    assert "Recommended" in page and "leaflet" in page and "10351032" in page
+
+
+def test_place_parsing():
+    assert plan.place("zeil")[0] == "Zeil, Frankfurt"
+    assert plan.place("50.1,8.6") == ("50.1,8.6", 8.6, 50.1)
+
+
+def test_far_off_elevator_coordinates_are_ignored():
+    data = {
+        "stationnumber": 1866,
+        "facilities": [
+            {
+                "equipmentnumber": 1,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "x",
+                "geocoordX": 8.62106,
+                "geocoordY": 50.106461,
+            }
+        ],
+    }  # real FaSta entry ~3 km west of the Hbf
+    check = plan.check_station("Frankfurt (Main) Hbf", None, lambda n: stations.parse_station(data, 0))
+    assert check.status == "ok" and check.use[0].lon is None
+    assert plan.entrance(check) == (
+        transit.find_stop("Frankfurt (Main) Hbf").lon,
+        transit.find_stop("Frankfurt (Main) Hbf").lat,
+    )
+
+
+def _via_hbf(options):
+    return next(o for o in options if len(o.journey.rides) == 2)
+
+
+def test_same_station_transfer_needs_only_the_platform_lift():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with({10955285}))
+    via_hbf = _via_hbf(options)
+    assert via_hbf.usable
+    assert [c.status for c in via_hbf.checks[1:3]] == ["ok", "ok"]
+    assert [e.equipment for e in via_hbf.checks[2].use] == [10561326]
+
+
+def test_hauptwache_platform_lift_does_not_verify_the_street_lifts():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    arrival = options[0].checks[-1]
+    assert arrival.name.endswith("Hauptwache") and arrival.status == "unverified"
+    assert "VGF" in arrival.reason
+    stop = transit.find_stop(arrival.name)
+    assert plan.entrance(arrival) == (stop.lon, stop.lat)
+
+
+def test_full_lift_chain_is_reported():
+    check = plan.check_station("Frankfurt (Main) Hbf", "101", lookup_with())
+    assert [e.equipment for e in check.use] == [10561326, 10955285]
+
+
+class Timed:
+    """A provider returning one live-looking journey that departs at a fixed time."""
+
+    def __init__(self, departs, legs=None):
+        self.departs, self.legs = departs, legs
+
+    def journeys(self, origin, destination, results=3, departure=None):
+        from datetime import timedelta
+
+        if (origin.name, destination.name) != ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"):
+            return []
+        legs = self.legs or [
+            transit.Leg(
+                "suburban",
+                "S3",
+                origin.name,
+                destination.name,
+                self.departs,
+                self.departs + timedelta(minutes=37),
+                None,
+                None,
+                37,
+            )
+        ]
+        return [transit.Journey(legs, "test")]
+
+
+def test_train_leaving_before_you_arrive_is_rejected():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    too_soon = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
+    )
+    assert not too_soon[0].usable and too_soon[0].problems
+    later = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=30)), lookup_with(), now
+    )
+    assert later[0].usable
+
+
+def test_walk_between_two_stations_is_checked():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    t = lambda m: now + timedelta(minutes=m)  # noqa: E731
+    legs = [
+        transit.Leg("regional", "RE", "Darmstadt Hbf", "Somewhere Nord", t(30), t(45), None, None, 15),
+        transit.Leg("walk", None, "Somewhere Nord", "Somewhere Süd", t(45), t(50), None, None, 5),
+        transit.Leg(
+            "subway", "U4", "Somewhere Süd", "Frankfurt (Main) Hauptwache", t(55), t(60), None, None, 5
+        ),
+    ]
+    (option,) = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Timed(t(30), legs), lookup_with(), now)
+    assert [w.status for w in option.transfer_walks] == ["unverified"]  # outside the mapped streets
+
+
+def test_unknown_platform_names_no_specific_lift():
+    check = plan.check_station("Darmstadt Hbf", None, lookup_with())
+    assert plan.lift_text(check, check.use[0]) == "the lift to your platform (1 of 1 platform lifts working)"
+    stop = transit.find_stop("Darmstadt Hbf")
+    assert plan.entrance(check) == (stop.lon, stop.lat)  # don't walk to a lift that may be the wrong one
+
+
+def test_station_roles_are_labelled():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    via_hbf = _via_hbf(options)
+    assert [c.role for c in via_hbf.checks] == ["board", "change (arrive)", "change (depart)", "alight"]
+
+
+def test_verified_trip_ranks_above_faster_unverified_one():
+    def option(minutes, status):
+        leg = transit.Leg("suburban", "S3", "a", "b", None, None, None, None, minutes)
+        walk = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        return plan.Option(
+            transit.Journey([leg], "test"),
+            [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, status)],
+            walk_start=walk,
+            walk_end=walk,
+        )
+
+    fast_unverified, slow_verified = option(20, "unverified"), option(40, "ok")
+    assert plan.rank([fast_unverified, slow_verified]) == [slow_verified, fast_unverified]
+
+
+def test_destination_outside_the_mapped_area_is_explained():
+    far = (8.70, 50.20)  # ~10 km north of anything in the test network
+    options = plan.plan(ORIGIN, far, "wheelchair", network(), transit.Static(), lookup_with())
+    assert options == []  # no station near it either
+    net = network()
+    del net.segments["h-z"]
+    for n in (10, 11):
+        del net.node_coords[n]
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", net, transit.Static(), lookup_with())
+    assert options and not any(o.usable for o in options)
+    assert "no street data near the destination; run ingest for that area" in options[0].problems
