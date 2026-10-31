@@ -228,23 +228,40 @@ class WalkRoute:
 
 
 def walk(
-    network: Network, graph: nx.Graph, start: tuple[float, float], end: tuple[float, float]
+    network: Network,
+    graph: nx.Graph,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    exact_start: bool = True,
+    exact_end: bool = True,
 ) -> WalkRoute | None:
-    """Cheapest route between two (lon, lat) points, or None if no passable route exists."""
+    """Cheapest route between two (lon, lat) points, or None if no passable route exists.
+
+    An exact point (a front door) must be reachable itself. A non-exact one (a station's map pin,
+    which may sit on a platform or above a staircase) only marks an area: we go to its nearest
+    step-free spot.
+    """
     source, target = nearest_node(graph, network, start), nearest_node(graph, network, end)
     # If the closest usable node is much farther than the closest street of any kind, the point
     # itself is cut off (e.g. only reachable by stairs): say so instead of stopping short.
-    for point, node in ((start, source), (end, target)):
+    for point, node, exact in ((start, source, exact_start), (end, target, exact_end)):
         closest = min(network.node_coords, key=lambda n: haversine_m(network.node_coords[n], point))
         snapped = haversine_m(network.node_coords[node], point)
         closest_m = haversine_m(network.node_coords[closest], point)
         if closest_m > MAX_SNAP_M:  # no street data here at all (area not ingested)
             return None
+        if not exact:
+            if snapped > MAX_SNAP_M:
+                return None
+            continue  # the walk then starts or ends at the snapped node itself, see below
         # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
         if closest not in graph and closest_m < snapped:
             return None
         if snapped > closest_m + MAX_EXTRA_SNAP_M:
             return None
+    # A non-exact point is replaced by its step-free node, so the line never crosses the stairs.
+    start = start if exact_start else network.node_coords[source]
+    end = end if exact_end else network.node_coords[target]
     try:
         nodes = nx.shortest_path(graph, source, target, weight="cost")
     except nx.NetworkXNoPath:

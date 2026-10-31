@@ -123,3 +123,15 @@ def test_avoided_does_not_claim_what_the_route_still_crosses():
     direct = routing.walk(net, routing.build_graph(net, None), A, C)
     assert "rough surface" in accessible.notes
     assert routing.avoided(net, accessible, direct) == ["stairs"]
+
+
+def test_station_pin_above_stairs_snaps_to_nearest_step_free_spot():
+    # Same staircase as above, but E is a station's map pin, not a front door.
+    E = (8.6412, 49.870)
+    net = network()
+    net.segments["be"] = seg("be", 2, 5, [B, E], highway="steps", length=15.0)
+    net.node_coords[5] = E
+    route = routing.walk(net, routing.build_graph(net, "wheelchair"), A, E, exact_end=False)
+    assert route is not None and route.segment_ids == ["ab"]
+    assert route.coords[-1] == B and E not in route.coords  # the drawn walk stops before the stairs
+    assert route.length_m == 100

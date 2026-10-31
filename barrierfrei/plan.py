@@ -135,12 +135,17 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
     )
 
 
-def entrance(check: StationCheck) -> tuple[float, float] | None:
-    """Where to walk to or from: the street-level lift if we know it, else the station itself."""
+def entrance_lift(check: StationCheck) -> stations.Elevator | None:
+    """The street-level lift to walk to, if we know which one it is."""
     lift = check.use[-1] if check.use else None
     # A platform lift picked without knowing the platform is a guess: walk to the station instead.
     known = lift is not None and (not lift.tracks or check.platform is not None)
-    if check.street_entrance and known and lift.lon is not None:
+    return lift if check.street_entrance and known and lift.lon is not None else None
+
+
+def entrance(check: StationCheck) -> tuple[float, float] | None:
+    """Where to walk to or from: the street-level lift if we know it, else the station itself."""
+    if lift := entrance_lift(check):
         return (lift.lon, lift.lat)
     stop = transit.find_stop(check.name)
     return (stop.lon, stop.lat) if stop else None
@@ -170,7 +175,7 @@ def check_journey(
                 )
                 ends = list(leg.coords) if leg and leg.coords else []
             if len(ends) == 2 and all(routing.covered(network, p) for p in ends):
-                route = routing.walk(network, graph, ends[0], ends[1])
+                route = routing.walk(network, graph, ends[0], ends[1], exact_start=False, exact_end=False)
                 walks.append(
                     TransferWalk(before.destination, after.origin, route, "ok" if route else "broken")
                 )
@@ -201,7 +206,7 @@ def plan(
     options = []
     for start in starts:
         # Ask for trains we can actually catch: after the walk to this station, plus a buffer for the lift.
-        approach = routing.walk(network, graph, origin, (start.lon, start.lat))
+        approach = routing.walk(network, graph, origin, (start.lon, start.lat), exact_end=False)
         earliest = now + timedelta(minutes=(approach.cost / 60 if approach else 0) + BOARDING_BUFFER_MIN)
         for end in ends:
             for journey in provider.journeys(start, end, departure=earliest):
@@ -211,13 +216,18 @@ def plan(
                 option = Option(journey, checks, transfer_walks)
                 board, alight = entrance(checks[0]), entrance(checks[-1])
                 if board and alight:
-                    option.walk_start = routing.walk(network, graph, origin, board)
-                    option.walk_end = routing.walk(network, graph, alight, destination)
-                    for a, b, accessible in (
-                        (origin, board, option.walk_start),
-                        (alight, destination, option.walk_end),
+                    # A lift's door must itself be step-free; a station pin only marks the area.
+                    board_exact = entrance_lift(checks[0]) is not None
+                    alight_exact = entrance_lift(checks[-1]) is not None
+                    option.walk_start = routing.walk(network, graph, origin, board, exact_end=board_exact)
+                    option.walk_end = routing.walk(
+                        network, graph, alight, destination, exact_start=alight_exact
+                    )
+                    for a, b, exact_a, exact_b, accessible in (
+                        (origin, board, True, board_exact, option.walk_start),
+                        (alight, destination, alight_exact, True, option.walk_end),
                     ):
-                        direct = routing.walk(network, plain, a, b)
+                        direct = routing.walk(network, plain, a, b, exact_a, exact_b)
                         if direct and accessible:
                             option.avoided += [
                                 x

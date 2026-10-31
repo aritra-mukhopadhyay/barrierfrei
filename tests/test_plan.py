@@ -254,3 +254,10 @@ def test_destination_outside_the_mapped_area_is_explained():
     options = plan.plan(ORIGIN, ZEIL, "wheelchair", net, transit.Static(), lookup_with())
     assert options and not any(o.usable for o in options)
     assert "no street data near the destination; run ingest for that area" in options[0].problems
+
+
+def test_known_lift_entrance_must_be_reachable_itself():
+    check = plan.check_station("Frankfurt (Main) Hbf", "101", lookup_with())
+    lift = plan.entrance_lift(check)
+    assert lift is not None and lift.equipment == 10955285  # exact: stairs-only lift door is cut off
+    assert plan.entrance_lift(plan.check_station("Darmstadt Hbf", None, lookup_with())) is None  # pin
