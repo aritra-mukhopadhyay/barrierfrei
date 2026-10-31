@@ -75,6 +75,8 @@ class Option:
     avoided: list[str] = field(default_factory=list)
     direct_walk: list[list[tuple[float, float]]] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)  # e.g. "train leaves before you reach the station"
+    board_via: str = ""  # which station door the walks use
+    alight_via: str = ""
 
     @property
     def usable(self) -> bool:
@@ -170,12 +172,41 @@ def entrance_lift(check: StationCheck) -> stations.Elevator | None:
     return lift if check.street_entrance and known and lift.lon is not None else None
 
 
-def entrance(check: StationCheck) -> tuple[float, float] | None:
-    """Where to walk to or from: the street-level lift if we know it, else the station itself."""
+Door = tuple[tuple[float, float], bool, str]  # (point, exact, how we describe it)
+
+
+def doors(check: StationCheck) -> list[Door]:
+    """Where a walk to or from this station may end, best first.
+
+    The live-checked street lift if we know it; else the station's mapped step-free entrances;
+    else its map pin, which only marks the area (not exact).
+    """
     if lift := entrance_lift(check):
-        return (lift.lon, lift.lat)
+        return [((lift.lon, lift.lat), True, lift.description or "the street lift")]
     stop = transit.find_stop(check.name)
-    return (stop.lon, stop.lat) if stop else None
+    if stop is None:
+        return []
+    if stop.entrances:
+        return [((e.lon, e.lat), True, e.name) for e in stop.entrances]
+    return [((stop.lon, stop.lat), False, "the station")]
+
+
+def entrance(check: StationCheck) -> tuple[float, float] | None:
+    found = doors(check)
+    return found[0][0] if found else None
+
+
+def best_walk(network, graph, point, candidates: list[Door], to_station: bool):
+    """The cheapest step-free walk between a point and any of a station's doors."""
+    best = None
+    for door, exact, label in candidates:
+        if to_station:
+            route = routing.walk(network, graph, point, door, exact_end=exact)
+        else:
+            route = routing.walk(network, graph, door, point, exact_start=exact)
+        if route and (best is None or route.cost < best[0].cost):
+            best = (route, door, exact, label)
+    return best
 
 
 def check_journey(
@@ -233,7 +264,15 @@ def plan(
     options = []
     for start in starts:
         # Ask for trains we can actually catch: after the walk to this station, plus a buffer for the lift.
-        approach = routing.walk(network, graph, origin, (start.lon, start.lat), exact_end=False)
+        found = best_walk(network, graph, origin, [((start.lon, start.lat), False, "")], True)
+        if start.entrances:
+            found = (
+                best_walk(
+                    network, graph, origin, [((e.lon, e.lat), True, e.name) for e in start.entrances], True
+                )
+                or found
+            )
+        approach = found[0] if found else None
         earliest = now + timedelta(minutes=walk_minutes(approach) + BOARDING_BUFFER_MIN)
         for end in ends:
             for journey in provider.journeys(start, end, departure=earliest):
@@ -241,15 +280,16 @@ def plan(
                     continue
                 checks, transfer_walks = check_journey(journey, station_lookup, network, graph)
                 option = Option(journey, checks, transfer_walks)
-                board, alight = entrance(checks[0]), entrance(checks[-1])
+                board_doors, alight_doors = doors(checks[0]), doors(checks[-1])
+                board = board_doors[0][0] if board_doors else None
+                alight = alight_doors[0][0] if alight_doors else None
                 if board and alight:
-                    # A lift's door must itself be step-free; a station pin only marks the area.
-                    board_exact = entrance_lift(checks[0]) is not None
-                    alight_exact = entrance_lift(checks[-1]) is not None
-                    option.walk_start = routing.walk(network, graph, origin, board, exact_end=board_exact)
-                    option.walk_end = routing.walk(
-                        network, graph, alight, destination, exact_start=alight_exact
-                    )
+                    # A door must itself be step-free; a station pin only marks the area.
+                    board_exact = alight_exact = True
+                    if start_walk := best_walk(network, graph, origin, board_doors, True):
+                        option.walk_start, board, board_exact, option.board_via = start_walk
+                    if end_walk := best_walk(network, graph, destination, alight_doors, False):
+                        option.walk_end, alight, alight_exact, option.alight_via = end_walk
                     for a, b, exact_a, exact_b, accessible in (
                         (origin, board, True, board_exact, option.walk_start),
                         (alight, destination, alight_exact, True, option.walk_end),
@@ -338,8 +378,8 @@ def summary(options: list[Option], profile: str) -> dict:
                     }
                     for c in o.checks
                 ],
-                "walk_to_station": walk(o.walk_start),
-                "walk_from_station": walk(o.walk_end),
+                "walk_to_station": walk(o.walk_start) and walk(o.walk_start) | {"via": o.board_via},
+                "walk_from_station": walk(o.walk_end) and walk(o.walk_end) | {"via": o.alight_via},
                 "transfer_walks": [
                     {"from": t.origin, "to": t.destination, "status": t.status, "route": walk(t.route)}
                     for t in o.transfer_walks

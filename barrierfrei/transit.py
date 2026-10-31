@@ -20,6 +20,16 @@ DB_REST_URL = "https://v6.db.transport.rest"
 
 
 @dataclass(frozen=True)
+class Entrance:
+    """A step-free street entrance (OSM node tagged wheelchair=yes, on our walking network)."""
+
+    name: str
+    lon: float
+    lat: float
+    osm_node: int
+
+
+@dataclass(frozen=True)
 class Stop:
     name: str
     lon: float
@@ -28,14 +38,45 @@ class Stop:
     fasta: int | None = None  # DB station number, used by the FaSta elevator API; None = not a DB station
     note: str = ""  # what our live data does not cover here
     street_verified: bool = True  # False when the street-to-concourse lifts are not in DB's data
+    entrances: tuple[Entrance, ...] = ()  # where a step-free walk should start or end
 
 
 # Stations near our two walking areas. FaSta numbers come from the FaSta API itself; stations without
 # one (U-Bahn, tram, bus stops run by local operators) have no live elevator data we can check.
+# Entrances are OSM nodes tagged wheelchair=yes (train_station_entrance, or a lift with a street
+# level), picked from the Geofabrik Hessen extract on 2026-10-31 and checked to lie on our network.
 STOPS = [
-    Stop("Darmstadt Hbf", 8.6297, 49.8725, "8000068", 1126),
-    Stop("Frankfurt (Main) Hbf", 8.6631, 50.1069, "8000105", 1866),
-    Stop("Frankfurt (Main) Taunusanlage", 8.6683, 50.1133, None, 1857),
+    Stop(
+        "Darmstadt Hbf",
+        8.6297,
+        49.8725,
+        "8000068",
+        1126,
+        entrances=(
+            Entrance("main entrance (Haupteingang)", 8.631109, 49.872584, 449623591),
+            Entrance("entrance Am Fürstenbahnhof", 8.630957, 49.872254, 741625561),
+        ),
+    ),
+    Stop(
+        "Frankfurt (Main) Hbf",
+        8.6631,
+        50.1069,
+        "8000105",
+        1866,
+        entrances=(
+            Entrance("north exit (Ausgang Nord)", 8.662313, 50.107988, 441774639),
+            Entrance("south exit (Ausgang Süd)", 8.664210, 50.105929, 441774641),
+        ),
+    ),
+    Stop(
+        "Frankfurt (Main) Taunusanlage",
+        8.6683,
+        50.1133,
+        None,
+        1857,
+        # The street lift is DB's lift 10472990 itself, so it is checked live.
+        entrances=(Entrance("street lift", 8.668330, 50.113266, 4130839623),),
+    ),
     Stop(
         "Frankfurt (Main) Hauptwache",
         8.6787,
@@ -45,6 +86,7 @@ STOPS = [
         "DB's lift links the S-Bahn platform to the concourse; the street lifts are run by VGF "
         "and not in DB's live data.",
         street_verified=False,
+        entrances=(Entrance("VGF street lift (exit 2)", 8.678079, 50.113935, 312306834),),
     ),
     Stop(
         "Frankfurt (Main) Konstablerwache",
@@ -54,6 +96,7 @@ STOPS = [
         1865,
         "DB lists only escalators here; the lifts are run by VGF and not in DB's live data.",
         street_verified=False,
+        entrances=(Entrance("VGF street lift on the Zeil (exit 2)", 8.687509, 50.114650, 463195376),),
     ),
 ]
 
