@@ -92,5 +92,5 @@ def walk_network(
     nodes = nodes.reset_index()
     present = [k for k in BARRIER_NODE_KEYS if k in nodes.columns]
     barrier_nodes = nodes[nodes[present].notna().any(axis=1)] if present else nodes.iloc[0:0]
-    log.info("Downloaded %d walk segments and %d barrier nodes", len(edges), len(barrier_nodes))
+    log.info("Loaded %d walk segments and %d barrier nodes", len(edges), len(barrier_nodes))
     return edges, barrier_nodes
