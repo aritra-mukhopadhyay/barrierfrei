@@ -89,6 +89,17 @@ class Option:
         )
 
     @property
+    def blockers(self) -> list[str]:
+        """Every reason this trip is not step-free right now, in words for the traveller."""
+        found = [f"{c.name}: {c.reason or 'no working lift'}" for c in self.checks if c.status == "broken"]
+        found += [
+            f"no step-free walk from {t.origin} to {t.destination}"
+            for t in self.transfer_walks
+            if t.status == "broken"
+        ]
+        return found + [p for p in self.problems if p not in found]
+
+    @property
     def verified(self) -> bool:
         """Every lift and walk on the trip was checked against live or map data."""
         return all(c.verified for c in self.checks) and all(t.status == "ok" for t in self.transfer_walks)
@@ -382,7 +393,7 @@ def summary(options: list[Option], profile: str) -> dict:
                     {"from": t.origin, "to": t.destination, "status": t.status, "route": walk(t.route)}
                     for t in o.transfer_walks
                 ],
-                "problems": o.problems,
+                "problems": o.blockers,
                 "avoided_on_shortest_path": o.avoided,
             }
             for o in options

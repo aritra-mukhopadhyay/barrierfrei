@@ -102,7 +102,9 @@ def test_summary_and_map_render():
     result = plan.summary(options, "stroller") | {"from": "A", "to": "B"}
     assert result["options"][0]["usable"]
     page = mapview.render(result, options, ORIGIN, ZEIL)
-    assert "Recommended" in page and "leaflet" in page and "10351032" in page
+    assert (
+        "Best we can offer" in page and "leaflet" in page and "10351032" in page
+    )  # test stations are all unverifiable
 
 
 def test_place_parsing():
@@ -317,3 +319,20 @@ def test_station_without_mapped_doors_falls_back_to_its_pin():
     assert plan.doors(check) == []
     (door,) = plan.doors(plan.StationCheck("Frankfurt (Main) Konstablerwache", None, "unverified"))
     assert door[1] is True and "Zeil" in door[2]
+
+
+def test_broken_lift_is_named_in_the_problems():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with({10561326}))
+    via_hbf = _via_hbf(options)
+    assert not via_hbf.usable
+    assert any(b.startswith("Frankfurt (Main) Hbf: every elevator") for b in via_hbf.blockers)
+    summary = plan.summary([via_hbf], "wheelchair")["options"][0]
+    assert summary["problems"] == via_hbf.blockers
+
+
+def test_panel_says_when_no_trip_is_fully_confirmed():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    result = plan.summary(options, "wheelchair") | {"from": "a", "to": "b"}
+    assert not any(o["fully_verified"] for o in result["options"] if o["usable"])
+    page = mapview.render(result, options, ORIGIN, ZEIL)
+    assert "Best we can offer" in page and "No trip right now is fully confirmed" in page

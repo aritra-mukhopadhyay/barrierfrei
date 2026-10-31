@@ -119,8 +119,14 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     avoided_html = f"<p><small>Avoided: {html.escape(', '.join(avoided))}</small></p>" if avoided else ""
     cls = "opt best" if best else ("opt" if option["usable"] else "opt bad")
     head = "Recommended" if best else ("Alternative" if option["usable"] else "Not step-free right now")
-    if option["usable"] and not option["fully_verified"]:
-        head += " <small class='unverified'>(some lifts can't be checked live)</small>"
+    if best and not option["fully_verified"]:
+        head = "Best we can offer"
+        why += (
+            "<br><small class='unverified'>No trip right now is fully confirmed (every lift in live "
+            "data and every walk on our map); check the parts marked unverified before you go.</small>"
+        )
+    elif option["usable"] and not option["fully_verified"]:
+        head += " <small class='unverified'>(some parts can't be checked)</small>"
     return (
         f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min{why}"
         f"<br><small>{html.escape(option['timetable'])}</small>"
