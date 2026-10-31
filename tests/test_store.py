@@ -87,3 +87,18 @@ def test_perception_cache_skips_judged_photos(tmp_path, segments):
     )
     store.save_perception(conn, "near", [Detection("curb", 0, (1, 2, 3, 4), (10, 10))], verdict, "m")
     assert [p for p, _ in store.photos_to_judge(conn)] == ["far"]
+
+
+def test_clear_area_drops_only_that_areas_network(tmp_path, segments):
+    conn = store.connect(tmp_path / "test.sqlite")
+    store.save_segments(conn, segments, ACCESS_TAGS)
+    store.save_photos(conn, [Photo("p1", 8.6405, 49.87, None, None, False, None)])
+    store.save_matches(
+        conn, ["p1"], pd.DataFrame({"photo_id": ["p1"], "segment_id": ["1-2-0"], "distance_m": [1.0]})
+    )
+    before = conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0]
+    assert store.clear_area(conn, (8.0, 40.0, 8.1, 40.1)) == 0  # nothing there
+    assert store.clear_area(conn, (8.5, 49.0, 8.8, 50.5)) == before
+    assert conn.execute("SELECT COUNT(*) FROM segments").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM segment_photos").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM photos").fetchone()[0] == 1  # photos and verdicts stay

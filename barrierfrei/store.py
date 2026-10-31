@@ -98,6 +98,32 @@ def save_segments(conn: sqlite3.Connection, segments: gpd.GeoDataFrame, tag_colu
         conn.executemany("INSERT OR REPLACE INTO segments VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
 
 
+def clear_area(conn: sqlite3.Connection, bbox: tuple[float, float, float, float]) -> int:
+    """Drop the street network inside bbox before re-ingesting it.
+
+    Segment ids come from the simplified graph, so a re-ingest with different simplification has
+    different ids; upserting alone would leave the old segments routable beside the new ones.
+    Photos and their verdicts are kept: they are re-linked to the new segments.
+    """
+    from shapely import box, wkt
+
+    area = box(*bbox)
+    stale = [
+        (segment_id,)
+        for segment_id, geometry in conn.execute("SELECT segment_id, geometry FROM segments")
+        if area.intersects(wkt.loads(geometry))
+    ]
+    west, south, east, north = bbox
+    with conn:
+        conn.executemany("DELETE FROM segment_photos WHERE segment_id = ?", stale)
+        conn.executemany("DELETE FROM segments WHERE segment_id = ?", stale)
+        conn.execute(
+            "DELETE FROM barrier_nodes WHERE lon BETWEEN ? AND ? AND lat BETWEEN ? AND ?",
+            (west, east, south, north),
+        )
+    return len(stale)
+
+
 def save_barrier_nodes(conn: sqlite3.Connection, nodes: gpd.GeoDataFrame, tag_columns: list[str]) -> None:
     present = [c for c in tag_columns if c in nodes.columns]
     rows = [
