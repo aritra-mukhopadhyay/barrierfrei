@@ -263,16 +263,14 @@ def plan(
 
     options = []
     for start in starts:
-        # Ask for trains we can actually catch: after the walk to this station, plus a buffer for the lift.
-        found = best_walk(network, graph, origin, [((start.lon, start.lat), False, "")], True)
-        if start.entrances:
-            found = (
-                best_walk(
-                    network, graph, origin, [((e.lon, e.lat), True, e.name) for e in start.entrances], True
-                )
-                or found
-            )
-        approach = found[0] if found else None
+        # Ask for trains we can actually catch. The door we finally use depends on the platform, which
+        # we only learn from the journey, so ask from the quickest way in: a train that turns out to
+        # be too early for the door we use is rejected below, and we never hide a catchable one.
+        ways_in = [((start.lon, start.lat), False, "")] + [
+            ((e.lon, e.lat), True, e.name) for e in start.entrances
+        ]
+        quickest = [w for door in ways_in if (w := best_walk(network, graph, origin, [door], True))]
+        approach = min((w[0] for w in quickest), key=walk_minutes, default=None)
         earliest = now + timedelta(minutes=walk_minutes(approach) + BOARDING_BUFFER_MIN)
         for end in ends:
             for journey in provider.journeys(start, end, departure=earliest):
