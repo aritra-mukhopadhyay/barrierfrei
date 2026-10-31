@@ -56,7 +56,7 @@ def main() -> None:
 
     settings = get_settings()
     conn = store.connect(settings.db_path)
-    client, session = make_client(settings), make_session()
+    client = session = None  # created on the first cache miss, so cached runs need no API key
 
     results: list[tuple[str, Judgement]] = []
     rows = []
@@ -66,6 +66,8 @@ def main() -> None:
         for photo_id, url, segment_id in sample:
             verdict = store.load_judgement(conn, photo_id)
             if verdict is None:
+                if client is None:
+                    client, session = make_client(settings), make_session()
                 try:
                     verdict = perceive_photo(client, session, settings, conn, photo_id, url)
                 except Exception:

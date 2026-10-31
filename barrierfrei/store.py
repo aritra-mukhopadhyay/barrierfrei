@@ -165,7 +165,8 @@ _EVAL_FILTERS = {
     "steps": "s.highway LIKE '%\"steps\"%'",
     "footway": (
         "(s.highway = '\"footway\"' OR s.highway = '\"pedestrian\"')"
-        " AND COALESCE(json_extract(s.tags, '$.wheelchair'), '') != 'no'"
+        # json_each covers both wheelchair=no and list values such as ["yes", "no"].
+        " AND NOT EXISTS (SELECT 1 FROM json_each(s.tags, '$.wheelchair') WHERE value = 'no')"
         " AND json_extract(s.tags, '$.step_count') IS NULL"
     ),
 }

@@ -64,3 +64,16 @@ def test_load_judgement_roundtrip(tmp_path):
     assert store.load_judgement(conn, "p") is None
     store.save_perception(conn, "p", [], _verdict(False), "m")
     assert store.load_judgement(conn, "p").passable_for.wheelchair is False
+
+
+def test_footway_sample_excludes_list_valued_wheelchair_no(tmp_path, segments):
+    segments = segments.copy()
+    segments["wheelchair"] = segments["wheelchair"].astype(object)
+    segments.at[0, "wheelchair"] = ["yes", "no"]  # OSM "yes;no" kept as a list
+    conn = store.connect(tmp_path / "test.sqlite")
+    store.save_segments(conn, segments, ACCESS_TAGS)
+    store.save_photos(conn, [Photo("foot", 8.6405, 49.870, None, None, False, "u")])
+    store.save_matches(
+        conn, ["foot"], pd.DataFrame({"photo_id": ["foot"], "segment_id": ["1-2-0"], "distance_m": [3.0]})
+    )
+    assert store.eval_sample(conn, "footway", 10) == []
