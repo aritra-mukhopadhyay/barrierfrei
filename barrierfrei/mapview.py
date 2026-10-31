@@ -80,7 +80,7 @@ def _why_best(option: dict, others: list[dict]) -> str:
     if faster and option["fully_verified"]:
         return (
             f"<br><small class='ok'>{option['minutes'] - min(faster)} min slower than the fastest option, "
-            "but every lift on it is confirmed working right now.</small>"
+            "but DB's live data shows every lift on it working.</small>"
         )
     return ""
 
@@ -109,7 +109,9 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     for t in option["transfer_walks"]:
         walks.insert(
             1,
-            f"<li class='{t['status']}'>Walk {html.escape(t['from'])} &rarr; {html.escape(t['to'])}: {t['status']}</li>",
+            f"<li class='{t['status']}'>Walk {html.escape(t['from'])} &rarr; {html.escape(t['to'])}: "
+            + (f"{t['route']['metres']} m, about {t['route']['minutes']} min" if t["route"] else t["status"])
+            + "</li>",
         )
     problems = "".join(f"<li class='broken'>{html.escape(p)}</li>" for p in option["problems"])
     avoided = option["avoided_on_shortest_path"]

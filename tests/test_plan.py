@@ -281,4 +281,21 @@ def test_panel_explains_a_slower_recommendation():
     verified = {"usable": True, "fully_verified": True, "minutes": 70}
     faster = {"usable": True, "fully_verified": False, "minutes": 60}
     assert "10 min slower" in mapview._why_best(verified, [verified, faster])
+    assert "live data" in mapview._why_best(verified, [verified, faster])
     assert mapview._why_best(faster, [verified, faster]) == ""
+
+
+def test_transfer_walks_are_counted_once_and_stale_status_is_not_verified():
+    rides = [
+        transit.Leg("suburban", "S1", "a", "b", None, None, None, None, 10),
+        transit.Leg("walk", None, "b", "c", None, None, None, None, 10),
+        transit.Leg("subway", "U4", "c", "d", None, None, None, None, 10),
+    ]
+    transfer = plan.routing.WalkRoute("wheelchair", 600, 600, [], [], [])
+    option = plan.Option(
+        transit.Journey(rides, "test"),
+        [plan.StationCheck("a", None, "ok"), plan.StationCheck("d", None, "ok", stale=True)],
+        [plan.TransferWalk("b", "c", transfer, "ok")],
+    )
+    assert option.minutes == 30 + plan.BOARDING_BUFFER_MIN  # the walk leg is already in the journey
+    assert not option.verified  # a cached lift status is not a confirmation

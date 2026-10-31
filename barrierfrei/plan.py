@@ -50,10 +50,11 @@ class StationCheck:
     elevators: list[stations.Elevator] = field(default_factory=list)  # all elevators, for the map
     street_entrance: bool = False  # is use[-1] the street-level lift we can walk to?
     role: str = ""  # board, alight, change (arrive) or change (depart)
+    stale: bool = False  # lift status came from the cache because FaSta was unreachable
 
     @property
     def verified(self) -> bool:
-        return self.status == "ok"
+        return self.status == "ok" and not self.stale
 
 
 @dataclass
@@ -92,7 +93,8 @@ class Option:
 
     @property
     def walks(self) -> list[routing.WalkRoute]:
-        return [w for w in (self.walk_start, self.walk_end, *(t.route for t in self.transfer_walks)) if w]
+        """The walks to and from the stations; walks between trains are already in the journey."""
+        return [w for w in (self.walk_start, self.walk_end) if w]
 
     @property
     def minutes(self) -> float:
@@ -106,11 +108,15 @@ class Option:
         Kept apart from minutes so penalties steer the choice without lying about the clock.
         """
         walk = sum(w.cost for w in self.walks) / 60
+        # A transfer walk's time is in the journey; only its extra cost (cobbles, detours) counts here.
+        transfers = sum(
+            max(0.0, t.route.cost / 60 - walk_minutes(t.route)) for t in self.transfer_walks if t.route
+        )
         unverified = UNVERIFIED_PENALTY_MIN * (
             sum(c.status == "unverified" for c in self.checks)
             + sum(t.status == "unverified" for t in self.transfer_walks)
         )
-        return walk + BOARDING_BUFFER_MIN + self.journey.minutes + unverified
+        return walk + transfers + BOARDING_BUFFER_MIN + self.journey.minutes + unverified
 
 
 def place(text: str) -> tuple[str, float, float]:
@@ -152,6 +158,7 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
         result.use,
         station.elevators,
         street_entrance=not transfer and stop.street_verified,
+        stale=station.stale,
     )
 
 
