@@ -56,9 +56,10 @@ draw("end", data.end);
 """
 
 
-def _elevators(check, used_equipment):
+def _elevators(check):
     if check is None:
         return []
+    used = {e.equipment for e in check.use}
     return [
         {
             "equipment": e.equipment,
@@ -67,7 +68,7 @@ def _elevators(check, used_equipment):
             "lon": e.lon,
             "lat": e.lat,
             "colour": ELEVATOR_COLOURS.get(e.state, "#9a6700"),
-            "used": e.equipment == used_equipment,
+            "used": e.equipment in used,
         }
         for e in check.elevators
     ]
@@ -83,7 +84,7 @@ def _option_html(option: dict, best: bool) -> str:
         f"<li class='{s['status']}'>{html.escape(s['name'])}"
         f"{' platform ' + html.escape(s['platform']) if s['platform'] else ''}: {s['status']}"
         f"{' (' + html.escape(s['reason']) + ')' if s['reason'] else ''}"
-        f"{'<br><small>Elevator: ' + html.escape(s['elevator']) + '</small>' if s['elevator'] else ''}</li>"
+        f"{'<br><small>Use: ' + html.escape(' then '.join(s['elevators_to_use'])) + '</small>' if s['elevators_to_use'] else ''}</li>"
         for s in option["stations"]
     )
     walks = []
@@ -94,6 +95,12 @@ def _option_html(option: dict, best: bool) -> str:
         if w:
             notes = f" <small>({html.escape(', '.join(w['notes']))})</small>" if w["notes"] else ""
             walks.append(f"<li>{label}: {w['metres']} m{notes}</li>")
+    for t in option["transfer_walks"]:
+        walks.insert(
+            1,
+            f"<li class='{t['status']}'>Walk {html.escape(t['from'])} &rarr; {html.escape(t['to'])}: {t['status']}</li>",
+        )
+    problems = "".join(f"<li class='broken'>{html.escape(p)}</li>" for p in option["problems"])
     avoided = option["avoided_on_shortest_path"]
     avoided_html = f"<p><small>Avoided: {html.escape(', '.join(avoided))}</small></p>" if avoided else ""
     cls = "opt best" if best else ("opt" if option["usable"] else "opt bad")
@@ -101,7 +108,7 @@ def _option_html(option: dict, best: bool) -> str:
     return (
         f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min"
         f"<br><small>{html.escape(option['timetable'])}</small>"
-        f"<ul>{''.join(walks[:1])}{rides}{''.join(walks[1:])}</ul><b>Elevators</b><ul>{checks}</ul>{avoided_html}</div>"
+        f"<ul>{''.join(walks[:1])}{rides}{''.join(walks[1:])}</ul><b>Elevators</b><ul>{checks}</ul><ul>{problems}</ul>{avoided_html}</div>"
     )
 
 
@@ -118,12 +125,12 @@ def render(result: dict, options: list, origin, destination) -> str:
         first, last = best.checks[0], best.checks[-1]
         start |= {
             "walk": best.walk_start.coords if best.walk_start else None,
-            "elevators": _elevators(first, first.elevator.equipment if first.elevator else None),
+            "elevators": _elevators(first),
             "direct": best.direct_walk[:1],
         }
         end |= {
             "walk": best.walk_end.coords if best.walk_end else None,
-            "elevators": _elevators(last, last.elevator.equipment if last.elevator else None),
+            "elevators": _elevators(last),
             "direct": best.direct_walk[1:],
         }
     best_index = options.index(best) if best else -1

@@ -18,11 +18,9 @@ from barrierfrei.http import DEFAULT_TIMEOUT
 log = logging.getLogger(__name__)
 
 FASTA_URL = "https://apis.deutschebahn.com/db-api-marketplace/apis/fasta/v2/stations/{number}"
-CACHE_TTL_S = 300
+CACHE_TTL_S = 300  # elevator status is live data; 5 minutes old is still useful, an hour is not
 # Lifts that are not for passengers: freight, tenants, the first-class lounge.
-NOT_PUBLIC = re.compile(
-    r"lasten|mieter|lounge", re.IGNORECASE
-)  # elevator status is live data; 5 minutes old is still useful, an hour is not
+NOT_PUBLIC = re.compile(r"lasten|mieter|lounge", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -129,10 +127,14 @@ def access(station: Station, track: str | None = None, transfer: bool = False) -
     """
     if not station.elevators:
         return Access(station, False, reason="no elevators listed")
-    if track and any(e.tracks for e in station.elevators):
-        groups = [(f"track {track}", [e for e in station.elevators if track in e.tracks])]
-        general = [e for e in station.elevators if not e.tracks]
-        if general and not transfer:
+    platform_lifts = [e for e in station.elevators if e.tracks]
+    general = [e for e in station.elevators if not e.tracks]
+    if platform_lifts:
+        if track:
+            groups = [(f"track {track}", [e for e in platform_lifts if track in e.tracks])]
+        else:  # platform unknown: any working platform lift is our best guess
+            groups = [("a platform", platform_lifts)]
+        if general and not transfer:  # not knowing the platform doesn't remove the street-level lift
             groups.append(("street level", general))
     else:  # descriptions don't say which platform: any working elevator is our best guess
         groups = [("the station", station.elevators)]

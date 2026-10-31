@@ -78,3 +78,31 @@ def test_tag_rules():
 
 def test_haversine_is_metres():
     assert 70 < routing.haversine_m(A, B) < 75  # 0.001 degrees of longitude at 49.87 N
+
+
+def test_steepest_incline_counts_whatever_the_order():
+    for incline in (["0%", "15%"], ["15%", "0%"], "3%;-14%"):
+        assert routing.segment_cost(seg("x", 1, 2, [A, B], incline=incline), "wheelchair")[0] is None
+
+
+def test_wheelchair_no_beats_generic_ramp_yes():
+    net = network(ramp="yes", **{"ramp:wheelchair": "no"})
+    route = routing.walk(net, routing.build_graph(net, "wheelchair"), A, C)
+    assert route.segment_ids == ["ab", "bd", "dc"]
+
+
+def test_point_only_reachable_by_stairs_is_cut_off():
+    # E sits at the top of a short staircase from B; the nearest usable node (B) is only 15 m away.
+    E = (8.6412, 49.870)
+    net = network()
+    net.segments["be"] = seg("be", 2, 5, [B, E], highway="steps", length=15.0)
+    net.node_coords[5] = E
+    assert routing.walk(net, routing.build_graph(net, "wheelchair"), A, E) is None
+    assert routing.walk(net, routing.build_graph(net, "suitcase"), A, E) is not None
+
+
+def test_connector_hops_count_as_walking_cost():
+    net = network()
+    near_a = (8.6400, 49.8701)  # ~11 m north of A
+    route = routing.walk(net, routing.build_graph(net, None), near_a, B)
+    assert route.segment_ids == ["ab"] and route.cost > 100 + 10

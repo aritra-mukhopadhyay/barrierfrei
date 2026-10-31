@@ -31,7 +31,15 @@ FASTA = {
                 "description": "Querbahnsteig <-> Gl.101/102",
                 "geocoordX": 8.6628995,
                 "geocoordY": 50.1072933,
-            }
+            },
+            {
+                "equipmentnumber": 10955285,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "Bahnhofsvorplatz <-> B-Ebene",
+                "geocoordX": 8.662759,
+                "geocoordY": 50.108021,
+            },
         ],
     },
     1864: {
@@ -117,8 +125,91 @@ def test_far_off_elevator_coordinates_are_ignored():
         ],
     }  # real FaSta entry ~3 km west of the Hbf
     check = plan.check_station("Frankfurt (Main) Hbf", None, lambda n: stations.parse_station(data, 0))
-    assert check.status == "ok" and check.elevator.lon is None
+    assert check.status == "ok" and check.use[0].lon is None
     assert plan.entrance(check) == (
         transit.find_stop("Frankfurt (Main) Hbf").lon,
         transit.find_stop("Frankfurt (Main) Hbf").lat,
     )
+
+
+def _via_hbf(options):
+    return next(o for o in options if len(o.journey.rides) == 2)
+
+
+def test_same_station_transfer_needs_only_the_platform_lift():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with({10955285}))
+    via_hbf = _via_hbf(options)
+    assert via_hbf.usable
+    assert [c.status for c in via_hbf.checks[1:3]] == ["ok", "ok"]
+    assert [e.equipment for e in via_hbf.checks[2].use] == [10561326]
+
+
+def test_hauptwache_platform_lift_does_not_verify_the_street_lifts():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    arrival = options[0].checks[-1]
+    assert arrival.name.endswith("Hauptwache") and arrival.status == "unverified"
+    assert "VGF" in arrival.reason
+    stop = transit.find_stop(arrival.name)
+    assert plan.entrance(arrival) == (stop.lon, stop.lat)
+
+
+def test_full_lift_chain_is_reported():
+    check = plan.check_station("Frankfurt (Main) Hbf", "101", lookup_with())
+    assert [e.equipment for e in check.use] == [10561326, 10955285]
+
+
+class Timed:
+    """A provider returning one live-looking journey that departs at a fixed time."""
+
+    def __init__(self, departs, legs=None):
+        self.departs, self.legs = departs, legs
+
+    def journeys(self, origin, destination, results=3, departure=None):
+        from datetime import timedelta
+
+        if (origin.name, destination.name) != ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"):
+            return []
+        legs = self.legs or [
+            transit.Leg(
+                "suburban",
+                "S3",
+                origin.name,
+                destination.name,
+                self.departs,
+                self.departs + timedelta(minutes=37),
+                None,
+                None,
+                37,
+            )
+        ]
+        return [transit.Journey(legs, "test")]
+
+
+def test_train_leaving_before_you_arrive_is_rejected():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    too_soon = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
+    )
+    assert not too_soon[0].usable and too_soon[0].problems
+    later = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=30)), lookup_with(), now
+    )
+    assert later[0].usable
+
+
+def test_walk_between_two_stations_is_checked():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    t = lambda m: now + timedelta(minutes=m)  # noqa: E731
+    legs = [
+        transit.Leg("regional", "RE", "Darmstadt Hbf", "Somewhere Nord", t(30), t(45), None, None, 15),
+        transit.Leg("walk", None, "Somewhere Nord", "Somewhere Süd", t(45), t(50), None, None, 5),
+        transit.Leg(
+            "subway", "U4", "Somewhere Süd", "Frankfurt (Main) Hauptwache", t(55), t(60), None, None, 5
+        ),
+    ]
+    (option,) = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Timed(t(30), legs), lookup_with(), now)
+    assert [w.status for w in option.transfer_walks] == ["unverified"]  # outside the mapped streets

@@ -119,3 +119,9 @@ def test_fetch_uses_fresh_cache_and_falls_back_to_stale(tmp_path):
     os.utime(tmp_path / "1126.json", (old, old))
     station = stations.fetch_station(Down(), "id", "key", 1126, tmp_path)
     assert station.stale and len(station.elevators) == 2
+
+
+def test_unknown_platform_still_needs_the_street_lift():
+    station = stations.with_outages(stations.parse_station(FRANKFURT_HBF, 0), {10955285})
+    assert not stations.access(station).ok
+    assert stations.access(station, transfer=True).ok

@@ -11,6 +11,7 @@ import argparse
 import json
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from barrierfrei import routing, stations, store, transit
@@ -28,6 +29,7 @@ PLACES = {
 MAX_STATION_WALK_M = 2500  # how far we look for a station to start from
 MAX_DESTINATION_WALK_M = 1200  # and how far from the destination we may get off
 UNVERIFIED_PENALTY_MIN = 10  # prefer stations whose elevators we can check live
+BOARDING_BUFFER_MIN = 5  # time for lifts and finding the platform
 
 
 @dataclass
@@ -36,31 +38,48 @@ class StationCheck:
     platform: str | None
     status: str  # "ok", "broken" or "unverified"
     reason: str = ""
-    elevator: stations.Elevator | None = None  # the street-level elevator we route to
+    use: list[stations.Elevator] = field(default_factory=list)  # every lift on the way, platform first
     elevators: list[stations.Elevator] = field(default_factory=list)  # all elevators, for the map
+    street_entrance: bool = False  # is use[-1] the street-level lift we can walk to?
+
+
+@dataclass
+class TransferWalk:
+    origin: str
+    destination: str
+    route: routing.WalkRoute | None
+    status: str  # "ok", "broken" (no step-free path in our map) or "unverified" (outside our map)
 
 
 @dataclass
 class Option:
     journey: transit.Journey
     checks: list[StationCheck]
+    transfer_walks: list[TransferWalk] = field(default_factory=list)
     walk_start: routing.WalkRoute | None = None
     walk_end: routing.WalkRoute | None = None
     avoided: list[str] = field(default_factory=list)
     direct_walk: list[list[tuple[float, float]]] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)  # e.g. "train leaves before you reach the station"
 
     @property
     def usable(self) -> bool:
         return (
             all(c.status != "broken" for c in self.checks)
+            and all(t.status != "broken" for t in self.transfer_walks)
             and self.walk_start is not None
             and self.walk_end is not None
+            and not self.problems
         )
 
     @property
     def minutes(self) -> float:
-        walk = sum(w.cost for w in (self.walk_start, self.walk_end) if w) / 60  # ~1 m/s
-        unverified = sum(UNVERIFIED_PENALTY_MIN for c in self.checks if c.status == "unverified")
+        walks = [self.walk_start, self.walk_end, *(t.route for t in self.transfer_walks)]
+        walk = sum(w.cost for w in walks if w) / 60  # ~1 m/s
+        unverified = UNVERIFIED_PENALTY_MIN * (
+            sum(c.status == "unverified" for c in self.checks)
+            + sum(t.status == "unverified" for t in self.transfer_walks)
+        )
         return walk + self.journey.minutes + unverified
 
 
@@ -88,22 +107,62 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
     if not station.elevators:  # not "broken": someone else may run the lifts, we just can't check them
         return StationCheck(name, platform, "unverified", stop.note or "no elevators in DB's live data")
     result = stations.access(station, platform, transfer)
-    status = "ok" if result.ok else "broken"
+    if not result.ok:
+        status = "broken"
+    elif transfer or stop.street_verified:
+        status = "ok"
+    else:  # the platform lift works, but the way up to the street is someone else's lift
+        status = "unverified"
+    reason = "; ".join(x for x in (result.reason, "" if transfer else stop.note) if x)
     return StationCheck(
         name,
         platform,
         status,
-        "; ".join(x for x in (result.reason, stop.note) if x),
-        result.use[-1] if result.use else None,  # the last group is the street-level one
+        reason,
+        result.use,
         station.elevators,
+        street_entrance=not transfer and stop.street_verified,
     )
 
 
 def entrance(check: StationCheck) -> tuple[float, float] | None:
-    if check.elevator and check.elevator.lon is not None:
-        return (check.elevator.lon, check.elevator.lat)
+    """Where to walk to or from: the street-level lift if we know it, else the station itself."""
+    if check.street_entrance and check.use and check.use[-1].lon is not None:
+        return (check.use[-1].lon, check.use[-1].lat)
     stop = transit.find_stop(check.name)
     return (stop.lon, stop.lat) if stop else None
+
+
+def check_journey(
+    journey: transit.Journey, lookup, network, graph
+) -> tuple[list[StationCheck], list[TransferWalk]]:
+    rides = journey.rides
+    checks = [check_station(rides[0].origin, rides[0].origin_platform, lookup)]
+    walks = []
+    for before, after in zip(rides, rides[1:], strict=False):
+        same_station = transit.normalise(before.destination) == transit.normalise(after.origin)
+        # Changing trains inside one station stays below street level; walking between two stations doesn't.
+        checks.append(
+            check_station(before.destination, before.destination_platform, lookup, transfer=same_station)
+        )
+        checks.append(check_station(after.origin, after.origin_platform, lookup, transfer=same_station))
+        if not same_station:
+            a, b = (transit.find_stop(n) for n in (before.destination, after.origin))
+            ends = [(s.lon, s.lat) for s in (a, b) if s]
+            if len(ends) < 2:
+                leg = next(
+                    (x for x in journey.legs if x.mode == "walk" and x.origin == before.destination), None
+                )
+                ends = list(leg.coords) if leg and leg.coords else []
+            if len(ends) == 2 and all(routing.covered(network, p) for p in ends):
+                route = routing.walk(network, graph, ends[0], ends[1])
+                walks.append(
+                    TransferWalk(before.destination, after.origin, route, "ok" if route else "broken")
+                )
+            else:
+                walks.append(TransferWalk(before.destination, after.origin, None, "unverified"))
+    checks.append(check_station(rides[-1].destination, rides[-1].destination_platform, lookup))
+    return checks, walks
 
 
 def plan(
@@ -113,7 +172,9 @@ def plan(
     network: routing.Network,
     provider,
     station_lookup,
+    now: datetime | None = None,
 ) -> list[Option]:
+    now = now or datetime.now().astimezone()
     graph = routing.build_graph(network, profile)
     plain = routing.build_graph(network, None)
     starts = [s for s in transit.STOPS if routing.haversine_m((s.lon, s.lat), origin) <= MAX_STATION_WALK_M]
@@ -123,21 +184,15 @@ def plan(
 
     options = []
     for start in starts:
+        # Ask for trains we can actually catch: after the walk to this station, plus a buffer for the lift.
+        approach = routing.walk(network, graph, origin, (start.lon, start.lat))
+        earliest = now + timedelta(minutes=(approach.cost / 60 if approach else 0) + BOARDING_BUFFER_MIN)
         for end in ends:
-            for journey in provider.journeys(start, end):
-                rides = journey.rides
-                if not rides:
+            for journey in provider.journeys(start, end, departure=earliest):
+                if not journey.rides:
                     continue
-                checks = [check_station(rides[0].origin, rides[0].origin_platform, station_lookup)]
-                for before, after in zip(rides, rides[1:], strict=False):  # transfers
-                    checks.append(
-                        check_station(before.destination, before.destination_platform, station_lookup)
-                    )
-                    checks.append(check_station(after.origin, after.origin_platform, station_lookup))
-                checks.append(
-                    check_station(rides[-1].destination, rides[-1].destination_platform, station_lookup)
-                )
-                option = Option(journey, checks)
+                checks, transfer_walks = check_journey(journey, station_lookup, network, graph)
+                option = Option(journey, checks, transfer_walks)
                 board, alight = entrance(checks[0]), entrance(checks[-1])
                 if board and alight:
                     option.walk_start = routing.walk(network, graph, origin, board)
@@ -154,6 +209,11 @@ def plan(
                                 if x not in option.avoided
                             ]
                             option.direct_walk.append(direct.coords)
+                departure = journey.rides[0].departure
+                if departure and option.walk_start:
+                    arrive = now + timedelta(minutes=option.walk_start.cost / 60 + BOARDING_BUFFER_MIN)
+                    if departure < arrive:
+                        option.problems.append("the train leaves before you can reach the platform")
                 options.append(option)
     return sorted(options, key=lambda o: (not o.usable, o.minutes))
 
@@ -187,12 +247,17 @@ def summary(options: list[Option], profile: str) -> dict:
                         "platform": c.platform,
                         "status": c.status,
                         "reason": c.reason,
-                        "elevator": c.elevator.description if c.elevator else None,
+                        "elevators_to_use": [e.description or f"lift {e.equipment}" for e in c.use],
                     }
                     for c in o.checks
                 ],
                 "walk_to_station": walk(o.walk_start),
                 "walk_from_station": walk(o.walk_end),
+                "transfer_walks": [
+                    {"from": t.origin, "to": t.destination, "status": t.status, "route": walk(t.route)}
+                    for t in o.transfer_walks
+                ],
+                "problems": o.problems,
                 "avoided_on_shortest_path": o.avoided,
             }
             for o in options

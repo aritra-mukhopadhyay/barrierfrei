@@ -68,10 +68,9 @@ def _values(tag) -> list[str]:
 
 
 def _incline_percent(tag) -> float | None:
-    for value in _values(tag):
-        if match := re.fullmatch(r"-?(\d+(?:\.\d+)?)\s*%", value):
-            return float(match.group(1))
-    return None
+    """Steepest numeric incline; merged ways can carry several values and any steep part counts."""
+    found = [float(m.group(1)) for v in _values(tag) if (m := re.fullmatch(r"-?(\d+(?:\.\d+)?)\s*%", v))]
+    return max(found) if found else None
 
 
 def segment_cost(
@@ -82,7 +81,11 @@ def segment_cost(
     highway = _values(segment.highway)
     reasons: list[str] = []
     cost = segment.length_m
-    has_ramp = "yes" in _values(tags.get("ramp:wheelchair")) or "yes" in _values(tags.get("ramp"))
+    # A wheelchair-specific "no" wins over a generic ramp=yes (that ramp may be for bicycles).
+    wheelchair_ramp = _values(tags.get("ramp:wheelchair"))
+    has_ramp = "yes" in wheelchair_ramp or (
+        "no" not in wheelchair_ramp and "yes" in _values(tags.get("ramp"))
+    )
 
     if "steps" in highway and not has_ramp:
         if profile in ("wheelchair", "stroller"):
@@ -231,8 +234,13 @@ def walk(
     # If the closest usable node is much farther than the closest street of any kind, the point
     # itself is cut off (e.g. only reachable by stairs): say so instead of stopping short.
     for point, node in ((start, source), (end, target)):
-        nearest_any = min(haversine_m(c, point) for c in network.node_coords.values())
-        if haversine_m(network.node_coords[node], point) > nearest_any + MAX_EXTRA_SNAP_M:
+        closest = min(network.node_coords, key=lambda n: haversine_m(network.node_coords[n], point))
+        snapped = haversine_m(network.node_coords[node], point)
+        closest_m = haversine_m(network.node_coords[closest], point)
+        # The closest node only has impassable segments (e.g. the top of a staircase): cut off.
+        if closest not in graph and closest_m < snapped:
+            return None
+        if snapped > closest_m + MAX_EXTRA_SNAP_M:
             return None
     try:
         nodes = nx.shortest_path(graph, source, target, weight="cost")
@@ -251,8 +259,17 @@ def walk(
         length += seg.length_m
         cost += edge["cost"]
     coords.append(end)
-    length += haversine_m(start, network.node_coords[source]) + haversine_m(end, network.node_coords[target])
+    connectors = haversine_m(start, network.node_coords[source]) + haversine_m(
+        end, network.node_coords[target]
+    )
+    length += connectors
+    cost += connectors  # the short hops onto the network cost plain walking distance
     return WalkRoute(graph.graph.get("profile"), length, cost, coords, segment_ids, notes)
+
+
+def covered(network: Network, point: tuple[float, float], radius_m: float = 200.0) -> bool:
+    """Is this point inside the area whose streets we have downloaded?"""
+    return any(haversine_m(c, point) <= radius_m for c in network.node_coords.values())
 
 
 def avoided(network: Network, accessible: WalkRoute, direct: WalkRoute) -> list[str]:

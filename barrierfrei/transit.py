@@ -27,6 +27,7 @@ class Stop:
     eva: str | None = None  # DB's stop id (EVA number), used by timetable APIs
     fasta: int | None = None  # DB station number, used by the FaSta elevator API; None = not a DB station
     note: str = ""  # what our live data does not cover here
+    street_verified: bool = True  # False when the street-to-concourse lifts are not in DB's data
 
 
 # Stations near our two walking areas. FaSta numbers come from the FaSta API itself; stations without
@@ -43,6 +44,7 @@ STOPS = [
         1864,
         "DB's lift links the S-Bahn platform to the concourse; the street lifts are run by VGF "
         "and not in DB's live data.",
+        street_verified=False,
     ),
     Stop(
         "Frankfurt (Main) Konstablerwache",
@@ -51,6 +53,7 @@ STOPS = [
         None,
         1865,
         "DB lists only escalators here; the lifts are run by VGF and not in DB's live data.",
+        street_verified=False,
     ),
 ]
 
@@ -87,6 +90,10 @@ class Journey:
 
     @property
     def minutes(self) -> float:
+        """Door-to-door time of the ride part, including waits between live connections."""
+        rides = self.rides
+        if rides and rides[0].departure and rides[-1].arrival:
+            return (rides[-1].arrival - rides[0].departure).total_seconds() / 60
         return sum(leg.minutes for leg in self.legs)
 
     @property
@@ -137,11 +144,15 @@ class DbRest:
     def __init__(self, session: requests.Session):
         self.session = session
 
-    def journeys(self, origin: Stop, destination: Stop, results: int = 3) -> list[Journey]:
+    def journeys(
+        self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
+    ) -> list[Journey]:
         if not origin.eva:
             return []
         # The destination may lack an EVA number; db.transport.rest accepts an address instead.
         params = {"from": origin.eva, "results": results, "stopovers": "false"}
+        if departure:  # leave time to walk to the station
+            params["departure"] = departure.isoformat()
         if destination.eva:
             params["to"] = destination.eva
         else:
@@ -178,7 +189,9 @@ TRANSFER_MINUTES = 6
 
 
 class Static:
-    def journeys(self, origin: Stop, destination: Stop, results: int = 3) -> list[Journey]:
+    def journeys(
+        self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
+    ) -> list[Journey]:
         found = []
         for plan in STATIC_JOURNEYS.get((origin.name, destination.name), [])[:results]:
             legs = []
@@ -198,11 +211,13 @@ class Auto:
     def __init__(self, session: requests.Session):
         self.live, self.static = DbRest(session), Static()
 
-    def journeys(self, origin: Stop, destination: Stop, results: int = 3) -> list[Journey]:
+    def journeys(
+        self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
+    ) -> list[Journey]:
         try:
-            found = self.live.journeys(origin, destination, results)
+            found = self.live.journeys(origin, destination, results, departure)
             if found:
                 return found
         except (requests.RequestException, ValueError) as err:
             log.warning("Live timetable unavailable (%s); using the typical timetable", err)
-        return self.static.journeys(origin, destination, results)
+        return self.static.journeys(origin, destination, results, departure)

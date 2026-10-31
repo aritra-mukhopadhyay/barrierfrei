@@ -69,3 +69,14 @@ def test_auto_falls_back_when_live_api_fails():
         transit.find_stop("Frankfurt (Main) Hauptwache"),
     )
     assert auto.journeys(darmstadt, hauptwache)[0].source.startswith("typical")
+
+
+def test_live_journey_minutes_include_waiting():
+    from datetime import datetime
+
+    def leg(dep, arr):
+        t = lambda m: datetime(2026, 10, 31, 12, m)  # noqa: E731
+        return transit.Leg("suburban", "S1", "a", "b", t(dep), t(arr), None, None, arr - dep)
+
+    journey = transit.Journey([leg(0, 10), leg(30, 40)], "test")
+    assert journey.minutes == 40
