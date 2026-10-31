@@ -105,7 +105,8 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     ):
         if w:
             notes = f" <small>({html.escape(', '.join(w['notes']))})</small>" if w["notes"] else ""
-            walks.append(f"<li>{label}: {w['metres']} m, about {w['minutes']} min{notes}</li>")
+            via = f" ({html.escape(w['via'])})" if w.get("via") else ""
+            walks.append(f"<li>{label}{via}: {w['metres']} m, about {w['minutes']} min{notes}</li>")
     for t in option["transfer_walks"]:
         walks.insert(
             1,

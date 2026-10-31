@@ -126,10 +126,8 @@ def test_far_off_elevator_coordinates_are_ignored():
     }  # real FaSta entry ~3 km west of the Hbf
     check = plan.check_station("Frankfurt (Main) Hbf", None, lambda n: stations.parse_station(data, 0))
     assert check.status == "ok" and check.use[0].lon is None
-    assert plan.entrance(check) == (
-        transit.find_stop("Frankfurt (Main) Hbf").lon,
-        transit.find_stop("Frankfurt (Main) Hbf").lat,
-    )
+    north = transit.find_stop("Frankfurt (Main) Hbf").entrances[0]
+    assert plan.entrance(check) == (north.lon, north.lat)  # a mapped door, not the bad lift position
 
 
 def _via_hbf(options):
@@ -149,8 +147,8 @@ def test_hauptwache_platform_lift_does_not_verify_the_street_lifts():
     arrival = options[0].checks[-1]
     assert arrival.name.endswith("Hauptwache") and arrival.status == "unverified"
     assert "VGF" in arrival.reason
-    stop = transit.find_stop(arrival.name)
-    assert plan.entrance(arrival) == (stop.lon, stop.lat)
+    lift = transit.find_stop(arrival.name).entrances[0]  # VGF's street lift: we walk there, unverified
+    assert plan.entrance(arrival) == (lift.lon, lift.lat) and "VGF" in lift.name
 
 
 def test_full_lift_chain_is_reported():
@@ -218,8 +216,12 @@ def test_walk_between_two_stations_is_checked():
 def test_unknown_platform_names_no_specific_lift():
     check = plan.check_station("Darmstadt Hbf", None, lookup_with())
     assert plan.lift_text(check, check.use[0]) == "the lift to your platform (1 of 1 platform lifts working)"
-    stop = transit.find_stop("Darmstadt Hbf")
-    assert plan.entrance(check) == (stop.lon, stop.lat)  # don't walk to a lift that may be the wrong one
+    # Don't walk to a platform lift that may be the wrong one: use the station's step-free doors.
+    assert [d[2] for d in plan.doors(check)] == [
+        "main entrance (Haupteingang)",
+        "entrance Am Fürstenbahnhof",
+    ]
+    assert all(exact for _, exact, _ in plan.doors(check))
 
 
 def test_station_roles_are_labelled():
@@ -299,3 +301,19 @@ def test_transfer_walks_are_counted_once_and_stale_status_is_not_verified():
     )
     assert option.minutes == 30 + plan.BOARDING_BUFFER_MIN  # the walk leg is already in the journey
     assert not option.verified  # a cached lift status is not a confirmation
+
+
+def test_walk_ends_at_the_cheapest_station_door_and_says_which():
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), transit.Static(), lookup_with())
+    best = options[0]
+    # In this toy network both doors hang off one node; Fürstenbahnhof is a couple of metres nearer.
+    assert best.board_via == "entrance Am Fürstenbahnhof"
+    summary = plan.summary(options, "wheelchair")["options"][0]
+    assert summary["walk_to_station"]["via"] == best.board_via
+
+
+def test_station_without_mapped_doors_falls_back_to_its_pin():
+    check = plan.StationCheck("Nowhere", None, "unverified")
+    assert plan.doors(check) == []
+    (door,) = plan.doors(plan.StationCheck("Frankfurt (Main) Konstablerwache", None, "unverified"))
+    assert door[1] is True and "Zeil" in door[2]
