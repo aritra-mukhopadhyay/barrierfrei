@@ -1,6 +1,7 @@
 """Download the walking network from OpenStreetMap, keeping accessibility tags."""
 
 import logging
+from pathlib import Path
 
 import geopandas as gpd
 import osmnx as ox
@@ -34,12 +35,16 @@ NODE_TAGS = ["barrier", "kerb", "highway", "crossing", "wheelchair", "step_count
 BARRIER_NODE_KEYS = ["barrier", "kerb", "wheelchair", "step_count"]
 
 
-def walk_network(bbox: tuple[float, float, float, float]) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
+def walk_network(
+    bbox: tuple[float, float, float, float], cache_dir: Path
+) -> tuple[gpd.GeoDataFrame, gpd.GeoDataFrame]:
     """Return (segments, barrier_nodes) for the walking network, in WGS84.
 
     Obstacles such as kerbs are often tagged on single OSM nodes, so we keep those nodes
     through graph simplification and return them separately.
     """
+    # osmnx caches Overpass responses in ./cache by default; keep them under the gitignored data dir.
+    ox.settings.cache_folder = str(cache_dir)
     ox.settings.useful_tags_way = sorted(set(ox.settings.useful_tags_way) | set(ACCESS_TAGS))
     ox.settings.useful_tags_node = sorted(set(ox.settings.useful_tags_node) | set(NODE_TAGS))
     graph = ox.graph_from_bbox(bbox, network_type="walk", simplify=False, retain_all=False)
