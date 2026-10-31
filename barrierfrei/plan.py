@@ -30,6 +30,14 @@ MAX_STATION_WALK_M = 2500  # how far we look for a station to start from
 MAX_DESTINATION_WALK_M = 1200  # and how far from the destination we may get off
 UNVERIFIED_PENALTY_MIN = 10  # prefer stations whose elevators we can check live
 BOARDING_BUFFER_MIN = 5  # time for lifts and finding the platform
+# Typical speeds on level ground; rough surfaces make the route costlier to choose, not this speed.
+WALK_SPEED_M_PER_MIN = {"wheelchair": 60.0, "stroller": 70.0, "suitcase": 70.0}
+
+
+def walk_minutes(route: routing.WalkRoute | None) -> float:
+    if route is None:
+        return 0.0
+    return route.length_m / WALK_SPEED_M_PER_MIN.get(route.profile or "", 75.0)
 
 
 @dataclass
@@ -83,14 +91,26 @@ class Option:
         return all(c.verified for c in self.checks) and all(t.status == "ok" for t in self.transfer_walks)
 
     @property
+    def walks(self) -> list[routing.WalkRoute]:
+        return [w for w in (self.walk_start, self.walk_end, *(t.route for t in self.transfer_walks)) if w]
+
+    @property
     def minutes(self) -> float:
-        walks = [self.walk_start, self.walk_end, *(t.route for t in self.transfer_walks)]
-        walk = sum(w.cost for w in walks if w) / 60  # ~1 m/s
+        """Door-to-door time we show: real walking time, the rides, and time for the first lift."""
+        return sum(walk_minutes(w) for w in self.walks) + BOARDING_BUFFER_MIN + self.journey.minutes
+
+    @property
+    def score(self) -> float:
+        """What we minimise when choosing: like minutes, but a cobbled or unverifiable trip costs more.
+
+        Kept apart from minutes so penalties steer the choice without lying about the clock.
+        """
+        walk = sum(w.cost for w in self.walks) / 60
         unverified = UNVERIFIED_PENALTY_MIN * (
             sum(c.status == "unverified" for c in self.checks)
             + sum(t.status == "unverified" for t in self.transfer_walks)
         )
-        return walk + self.journey.minutes + unverified
+        return walk + BOARDING_BUFFER_MIN + self.journey.minutes + unverified
 
 
 def place(text: str) -> tuple[str, float, float]:
@@ -207,7 +227,7 @@ def plan(
     for start in starts:
         # Ask for trains we can actually catch: after the walk to this station, plus a buffer for the lift.
         approach = routing.walk(network, graph, origin, (start.lon, start.lat), exact_end=False)
-        earliest = now + timedelta(minutes=(approach.cost / 60 if approach else 0) + BOARDING_BUFFER_MIN)
+        earliest = now + timedelta(minutes=walk_minutes(approach) + BOARDING_BUFFER_MIN)
         for end in ends:
             for journey in provider.journeys(start, end, departure=earliest):
                 if not journey.rides:
@@ -254,7 +274,7 @@ def plan(
                             option.problems.append(f"no step-free walk found {label}")
                 departure = journey.rides[0].departure
                 if departure and option.walk_start:
-                    arrive = now + timedelta(minutes=option.walk_start.cost / 60 + BOARDING_BUFFER_MIN)
+                    arrive = now + timedelta(minutes=walk_minutes(option.walk_start) + BOARDING_BUFFER_MIN)
                     if departure < arrive:
                         option.problems.append("the train leaves before you can reach the platform")
                 options.append(option)
@@ -263,7 +283,7 @@ def plan(
 
 def rank(options: list[Option]) -> list[Option]:
     """Usable first; among those, a slower trip we could fully verify beats a faster one we couldn't."""
-    return sorted(options, key=lambda o: (not o.usable, not o.verified, o.minutes))
+    return sorted(options, key=lambda o: (not o.usable, not o.verified, o.score))
 
 
 def lift_text(check: StationCheck, lift: stations.Elevator) -> str:
@@ -278,7 +298,9 @@ def summary(options: list[Option], profile: str) -> dict:
     """A plain JSON description of the plan: input for the map and for the model's explanation."""
 
     def walk(w: routing.WalkRoute | None):
-        return None if w is None else {"metres": round(w.length_m), "notes": w.notes}
+        if w is None:
+            return None
+        return {"metres": round(w.length_m), "minutes": round(walk_minutes(w)), "notes": w.notes}
 
     return {
         "profile": profile,

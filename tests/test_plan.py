@@ -261,3 +261,24 @@ def test_known_lift_entrance_must_be_reachable_itself():
     lift = plan.entrance_lift(check)
     assert lift is not None and lift.equipment == 10955285  # exact: stairs-only lift door is cut off
     assert plan.entrance_lift(plan.check_station("Darmstadt Hbf", None, lookup_with())) is None  # pin
+
+
+def test_shown_minutes_use_walking_speed_not_route_penalties():
+    leg = transit.Leg("suburban", "S3", "a", "b", None, None, None, None, 30)
+    cobbled = plan.routing.WalkRoute("wheelchair", 600, 1080, [], [], ["rough surface"])  # cost x1.8
+    option = plan.Option(
+        transit.Journey([leg], "test"),
+        [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, "unverified")],
+        walk_start=cobbled,
+        walk_end=cobbled,
+    )
+    # 1200 m at 60 m/min, the first lift, the ride; no surface or "unverified" penalty on the clock.
+    assert option.minutes == 20 + plan.BOARDING_BUFFER_MIN + 30
+    assert option.score == 36 + plan.BOARDING_BUFFER_MIN + 30 + plan.UNVERIFIED_PENALTY_MIN
+
+
+def test_panel_explains_a_slower_recommendation():
+    verified = {"usable": True, "fully_verified": True, "minutes": 70}
+    faster = {"usable": True, "fully_verified": False, "minutes": 60}
+    assert "10 min slower" in mapview._why_best(verified, [verified, faster])
+    assert mapview._why_best(faster, [verified, faster]) == ""
