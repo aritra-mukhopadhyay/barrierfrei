@@ -160,6 +160,16 @@ class Option:
         )
         return walk + transfers + BOARDING_BUFFER_MIN + self.journey.minutes + unverified
 
+    @property
+    def ranked_arrival(self) -> datetime | None:
+        """The arrival time, pushed later by the same penalties `score` adds (rough walks, unverified
+        stations), so penalties keep steering the choice without changing the times we show.
+        """
+        arrival = self.arrive_at
+        if arrival is None:
+            return None
+        return arrival + timedelta(minutes=self.score - self.minutes)
+
 
 def place(text: str) -> tuple[str, float, float]:
     if text.lower() in PLACES:
@@ -413,8 +423,19 @@ def plan(
 
 
 def rank(options: list[Option]) -> list[Option]:
-    """Usable first; among those, a slower trip we could fully verify beats a faster one we couldn't."""
-    return sorted(options, key=lambda o: (not o.usable, not o.verified, o.score))
+    """Usable first, then fully verified, then earliest (penalised) arrival, then score; trips without
+    times (the typical timetable) keep today's order by score.
+    """
+    return sorted(
+        options,
+        key=lambda o: (
+            not o.usable,
+            not o.verified,
+            o.ranked_arrival is None,
+            o.ranked_arrival.timestamp() if o.ranked_arrival else 0.0,
+            o.score,
+        ),
+    )
 
 
 def collapse(options: list[Option]) -> list[Option]:
@@ -422,7 +443,9 @@ def collapse(options: list[Option]) -> list[Option]:
 
     A different platform can mean a different lift, so it stays a separate card; so does a trip
     whose doors, usability or verification differ. Groups keep the position of their best-ranked
-    member, and the kept card lists the other departures in `later`.
+    member, and the kept card lists the other departures in `later`. For the same line, platforms
+    and doors, the earliest departure also arrives first, so the kept card and the group's position
+    agree.
     """
 
     def key(option: Option):

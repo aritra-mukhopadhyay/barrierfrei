@@ -89,6 +89,22 @@ def _elevators(check):
 
 def _why_best(option: dict, others: list[dict]) -> str:
     """Say why we recommend a trip that isn't the fastest; people will wonder."""
+    arrive = option.get("arrive_at")
+    if arrive:
+        # Known limitation: a trip arriving after midnight compares wrongly against one arriving before.
+        def to_minutes(value: str) -> int:
+            hours, minutes = value.split(":")
+            return int(hours) * 60 + int(minutes)
+
+        arrivals = [to_minutes(o["arrive_at"]) for o in others if o["usable"] and o.get("arrive_at")]
+        if arrivals:
+            later_by = to_minutes(arrive) - min(arrivals)
+            if later_by > 0 and option["fully_verified"]:
+                return (
+                    f"<br><small class='ok'>arrives {later_by} min later than the earliest option, "
+                    "but DB's live data shows every lift on it working.</small>"
+                )
+        return ""
     faster = [o["minutes"] for o in others if o["usable"] and o["minutes"] < option["minutes"]]
     if faster and option["fully_verified"]:
         return (
