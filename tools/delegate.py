@@ -45,6 +45,7 @@ from barrierfrei.config import Settings  # noqa: E402
 TASKS_DIR = REPO.parent / "barrierfrei-tasks"
 DEFAULT_MODEL = "muse-spark-1.3"  # Standard mode: Meta does not train on what we send.
 DEFAULT_MAX_STEPS = 60
+DEFAULT_TIMEOUT_MIN = 30  # a broken sandbox makes headless Muse Code wait forever instead of exiting
 SECRETS = ("MODEL_API_KEY", "META_API_KEY", "MAPILLARY_TOKEN", "DB_API_KEY", "DB_CLIENT_ID")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
@@ -102,6 +103,9 @@ def find_session_id(log: Path) -> str | None:
 
     def walk(obj: object) -> str | None:
         if isinstance(obj, dict):
+            # Muse Code 1.4 names the session in its stream header: {"stream": {"kind": "session", "id": ...}}
+            if obj.get("kind") == "session" and isinstance(obj.get("id"), str):
+                return obj["id"]
             for key, value in obj.items():
                 if key in ("session_id", "sessionId") and isinstance(value, str):
                     return value
@@ -125,25 +129,50 @@ def find_session_id(log: Path) -> str | None:
     return None
 
 
-def run_muse(slug: str, prompt: str, model: str, max_steps: int, session: str | None) -> int:
+def sandbox_ready(muse: str) -> None:
+    """On Windows, stop early with the fix when Muse Code's sandbox was never set up."""
+    if sys.platform != "win32":
+        return
+    proc = subprocess.run([muse, "sandbox", "windows", "check"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit(
+            "Muse Code's Windows sandbox is not set up, so every agent command would fail.\n"
+            "Once, in PowerShell opened with 'Run as administrator':\n"
+            "  muse sandbox windows setup\n"
+            "  muse sandbox windows check    # should print status=ready\n\n" + proc.stdout.strip()
+        )
+
+
+def run_muse(
+    slug: str, prompt: str, model: str, max_steps: int, session: str | None, timeout_min: int
+) -> int:
     muse = shutil.which("muse")
     if not muse:
         sys.exit("`muse` is not on PATH. Install Muse Code first (see the setup guide).")
+    sandbox_ready(muse)
     prompt_file = TASKS_DIR / f"{slug}.prompt.md"
     prompt_file.write_text(prompt, encoding="utf-8")
     cmd = [muse, "exec", "--model", model, "--max-model-steps", str(max_steps), "--json"]
     cmd += ["--prompt-file", str(prompt_file)]
+    cmd += ["--no-foreign-personal-context"]  # don't load your personal Claude Code / Codex rules
     if session:
         cmd += ["--session-id", session]
     key = read_key()
     env = {k: v for k, v in os.environ.items() if k not in SECRETS}  # agent gets only its own key
     env["META_API_KEY"] = key
     log = TASKS_DIR / f"{slug}.jsonl"
-    print(f"Muse Code is working on '{slug}' (model {model}, at most {max_steps} steps)...")
-    with log.open("a", encoding="utf-8") as out:
-        proc = subprocess.run(cmd, cwd=worktree(slug), env=env, stdout=out, stderr=subprocess.STDOUT)
-    print(f"muse exec exited with {proc.returncode} (0 = the run finished, not that the work is right).")
-    return proc.returncode
+    errlog = TASKS_DIR / f"{slug}.stderr.log"  # kept apart so the .jsonl stays pure JSON events
+    print(f"Muse Code is working on '{slug}' ({model}, at most {max_steps} steps / {timeout_min} min)...")
+    with log.open("a", encoding="utf-8") as out, errlog.open("a", encoding="utf-8") as err:
+        try:
+            code = subprocess.run(
+                cmd, cwd=worktree(slug), env=env, stdout=out, stderr=err, timeout=timeout_min * 60
+            ).returncode
+        except subprocess.TimeoutExpired:
+            print(f"Stopped Muse Code after {timeout_min} min; see {errlog.name} and the end of {log.name}.")
+            return 124
+    print(f"muse exec exited with {code} (0 = the run finished, not that the work is right).")
+    return code
 
 
 def save_diff(slug: str) -> None:
@@ -154,7 +183,7 @@ def save_diff(slug: str) -> None:
     print("\n--- changed files")
     print(git("diff", "HEAD", "--stat", cwd=wt).strip() or "(no changes)")
     print(f"\nFull diff: {TASKS_DIR / f'{slug}.diff'}")
-    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'}")
+    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'} (warnings: {slug}.stderr.log)")
 
 
 def check(slug: str) -> bool:
@@ -197,7 +226,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         agents_md=agents.read_text(encoding="utf-8") if agents.exists() else "(none)",
         task=task_file.read_text(encoding="utf-8"),
     )
-    code = run_muse(slug, prompt, args.model, args.max_steps, session=None)
+    code = run_muse(slug, prompt, args.model, args.max_steps, None, args.timeout)
     meta = {
         "slug": slug,
         "base": git("rev-parse", base).strip(),
@@ -217,7 +246,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     session = args.session or meta.get("session")
     if not session:
         sys.exit(f"No session id found in {args.slug}.jsonl; pass one with --session.")
-    code = run_muse(args.slug, args.message, args.model or meta["model"], args.max_steps, session)
+    code = run_muse(
+        args.slug, args.message, args.model or meta["model"], args.max_steps, session, args.timeout
+    )
     save_diff(args.slug)
     print(f"\nReview the diff, then run checks: python tools/delegate.py check {args.slug}")
     return code
@@ -231,7 +262,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
     if worktree(args.slug).exists():
         git("worktree", "remove", "--force", str(worktree(args.slug)))
     subprocess.run(["git", "branch", "-D", f"muse/{args.slug}"], cwd=REPO, capture_output=True)
-    for suffix in (".json", ".jsonl", ".diff", ".prompt.md"):
+    for suffix in (".json", ".jsonl", ".stderr.log", ".diff", ".prompt.md"):
         (TASKS_DIR / f"{args.slug}{suffix}").unlink(missing_ok=True)
     print(f"Removed task '{args.slug}'.")
     return 0
@@ -249,6 +280,7 @@ def main() -> int:
     p.add_argument("--base", help="commit or branch to start from (default: HEAD)")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_MIN, help="minutes before giving up")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="send review feedback to the same Muse Code session")
@@ -257,6 +289,7 @@ def main() -> int:
     p.add_argument("--session", help="override the session id read from the log")
     p.add_argument("--model")
     p.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_MIN, help="minutes before giving up")
     p.set_defaults(func=cmd_resume)
 
     p = sub.add_parser("check", help="re-run checks and refresh the diff")
