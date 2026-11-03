@@ -1,14 +1,17 @@
 """Public transport between the two walking areas.
 
-Two providers behind one interface:
+Three providers behind one interface:
+- DbTimetables: live direct trains from DB's Timetables API (station boards, DB rail only).
 - DbRest: live journeys from the public db.transport.rest API (DB's HAFAS, includes S-Bahn, U-Bahn, bus).
-- Static: a hand-checked fallback so the demo still works when that free API is down.
+- Static: a hand-checked fallback so the demo still works when those APIs are down.
 """
 
 import logging
 import re
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -17,6 +20,14 @@ from barrierfrei.http import DEFAULT_TIMEOUT
 log = logging.getLogger(__name__)
 
 DB_REST_URL = "https://v6.db.transport.rest"
+TIMETABLES_URL = "https://apis.deutschebahn.com/db-api-marketplace/apis/timetables/v1"
+
+# Our names for the Frankfurt tunnel stops have no EVA number; the IRIS name is the lookup pattern.
+IRIS_NAMES = {
+    "Frankfurt (Main) Taunusanlage": "Frankfurt(M)Taunusanlage",
+    "Frankfurt (Main) Hauptwache": "Frankfurt(M)Hauptwache",
+    "Frankfurt (Main) Konstablerwache": "Frankfurt(M)Konstablerwache",
+}
 
 
 @dataclass(frozen=True)
@@ -210,6 +221,192 @@ class DbRest:
         return parse_db_rest(resp.json())
 
 
+def _trip_key(stop_id: str) -> str:
+    """The trip part of an IRIS stop id (`<trip>-<YYMMDDHHmm>-<index>`; `<trip>` may start with `-`)."""
+    parts = stop_id.rsplit("-", 2)
+    return parts[0] if len(parts) == 3 else stop_id
+
+
+def _iris_time(value: str | None, tz: ZoneInfo) -> datetime | None:
+    """Parse `YYMMDDHHmm` in German local time; None when missing or malformed (skip, don't guess)."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%y%m%d%H%M").replace(tzinfo=tz)
+    except ValueError:
+        return None
+
+
+def _cancelled(*elements: ET.Element | None) -> bool:
+    return any(el is not None and el.get("cs") == "c" for el in elements)
+
+
+class DbTimetables:
+    """Live direct trains from DB's Timetables API (IRIS station boards)."""
+
+    def __init__(self, session: requests.Session, client_id: str, api_key: str, timeout: float = 8):
+        self.session, self.client_id, self.api_key, self.timeout = session, client_id, api_key, timeout
+        self._eva_cache: dict[str, str | None] = {}
+        self._xml_cache: dict[str, ET.Element] = {}
+
+    def _get_xml(self, url: str) -> ET.Element:
+        if url in self._xml_cache:
+            return self._xml_cache[url]
+        resp = self.session.get(
+            url,
+            headers={"DB-Client-Id": self.client_id, "DB-Api-Key": self.api_key},
+            timeout=self.timeout,
+        )
+        try:
+            resp.raise_for_status()
+        except requests.HTTPError as err:
+            status = getattr(getattr(err, "response", None), "status_code", None)
+            if "/plan/" in url and status == 404:  # no planned trains for that hour
+                root = ET.fromstring("<timetable/>")
+                self._xml_cache[url] = root
+                return root
+            raise
+        data = getattr(resp, "text", None)
+        if data is None:
+            data = resp.content
+        try:
+            root = ET.fromstring(data)
+        except ET.ParseError as err:
+            raise ValueError(f"unparseable timetable XML from {url}") from err
+        self._xml_cache[url] = root
+        return root
+
+    def _eva(self, stop: Stop) -> str | None:
+        if stop.eva:
+            return stop.eva
+        if stop.name in self._eva_cache:
+            return self._eva_cache[stop.name]
+        pattern = IRIS_NAMES.get(stop.name)
+        if not pattern:
+            self._eva_cache[stop.name] = None
+            return None
+        root = self._get_xml(f"{TIMETABLES_URL}/station/{pattern}")
+        stations = root.findall("station")
+        found = next((s for s in stations if s.get("name") == pattern), None)
+        found = found if found is not None else (stations[0] if stations else None)
+        eva = found.get("eva") if found is not None else None
+        self._eva_cache[stop.name] = eva or None
+        return self._eva_cache[stop.name]
+
+    def _changes(self, eva: str) -> dict[str, ET.Element]:
+        root = self._get_xml(f"{TIMETABLES_URL}/fchg/{eva}")
+        return {s.get("id"): s for s in root.findall("s") if s.get("id")}
+
+    def journeys(
+        self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
+    ) -> list[Journey]:
+        try:
+            berlin = ZoneInfo("Europe/Berlin")
+        except ZoneInfoNotFoundError as err:
+            raise ValueError("Europe/Berlin timezone unavailable") from err
+        if departure is None:
+            departure = datetime.now(berlin)
+        elif departure.tzinfo is None:  # naive values are Berlin time, not the host's offset
+            departure = departure.replace(tzinfo=berlin)
+        dep_berlin = departure.astimezone(berlin)
+
+        origin_eva, dest_eva = self._eva(origin), self._eva(destination)
+        if not origin_eva or not dest_eva:
+            return []
+
+        origin_changes, dest_changes = self._changes(origin_eva), self._changes(dest_eva)
+
+        def board(eva: str, when: datetime) -> ET.Element:
+            return self._get_xml(
+                f"{TIMETABLES_URL}/plan/{eva}/{when.strftime('%y%m%d')}/{when.strftime('%H')}"
+            )
+
+        origin_stops: list[ET.Element] = []
+        for offset in (-1, 0, 1):
+            origin_stops += board(origin_eva, dep_berlin + timedelta(hours=offset)).findall("s")
+
+        dest_station: str | None = None
+        dest_stops: list[ET.Element] = []
+        for offset in (-1, 0, 1, 2):
+            root = board(dest_eva, dep_berlin + timedelta(hours=offset))
+            if dest_station is None:
+                dest_station = root.get("station")
+            dest_stops += root.findall("s")
+        if not dest_station:
+            return []
+
+        dest_by_trip: dict[str, list[tuple]] = {}
+        dest_by_train: dict[tuple[str, str], list[tuple]] = {}
+        for s in dest_stops:
+            sid = s.get("id")
+            ar = s.find("ar")
+            if not sid or ar is None:
+                continue
+            change = dest_changes.get(sid)
+            changed_ar = change.find("ar") if change is not None else None
+            if _cancelled(s, ar, change, changed_ar):
+                continue
+            ct = changed_ar.get("ct") if changed_ar is not None else None
+            arrival = _iris_time(ct or ar.get("pt"), berlin)
+            if arrival is None:
+                continue
+            tl = s.find("tl")
+            c = tl.get("c") if tl is not None else ""
+            n = tl.get("n") if tl is not None else ""
+            cp = changed_ar.get("cp") if changed_ar is not None else None
+            entry = (arrival, cp or ar.get("pp"))
+            dest_by_trip.setdefault(_trip_key(sid), []).append(entry)
+            dest_by_train.setdefault((c or "", n or ""), []).append(entry)
+
+        found: list[tuple[datetime, Journey]] = []
+        for s in origin_stops:
+            sid = s.get("id")
+            dp = s.find("dp")
+            if not sid or dp is None:
+                continue
+            change = origin_changes.get(sid)
+            changed_dp = change.find("dp") if change is not None else None
+            if _cancelled(s, dp, change, changed_dp):
+                continue
+            ct = changed_dp.get("ct") if changed_dp is not None else None
+            departs = _iris_time(ct or dp.get("pt"), berlin)
+            if departs is None or departs < departure:
+                continue
+            cpth = changed_dp.get("cpth") if changed_dp is not None else None
+            path = (cpth or dp.get("ppth") or "").split("|")
+            if dest_station not in path:
+                continue
+            tl = s.find("tl")
+            c = tl.get("c") if tl is not None else ""
+            n = tl.get("n") if tl is not None else ""
+            matches = dest_by_trip.get(_trip_key(sid)) or dest_by_train.get((c or "", n or ""), [])
+            arrivals = sorted(a for a, _ in matches if a >= departs)
+            if not arrivals:
+                continue
+            arrival = arrivals[0]
+            dest_platform = next(p for a, p in matches if a == arrival)
+            mode = "suburban" if c == "S" else "regional" if c in ("RE", "RB") else "national"
+            # Real boards give l="S6" (category included); some give only the number.
+            label = dp.get("l")
+            line = (label if not label.isdigit() else f"{c}{label}") if label else f"{c} {n}"
+            cp = changed_dp.get("cp") if changed_dp is not None else None
+            leg = Leg(
+                mode=mode,
+                line=line,
+                origin=origin.name,
+                destination=destination.name,
+                departure=departs,
+                arrival=arrival,
+                origin_platform=cp or dp.get("pp"),
+                destination_platform=dest_platform,
+                minutes=(arrival - departs).total_seconds() / 60,
+                coords=((origin.lon, origin.lat), (destination.lon, destination.lat)),
+            )
+            found.append((departs, Journey([leg], "DB Timetables (live)")))
+        found.sort(key=lambda item: item[0])
+        return [journey for _, journey in found[:results]]
+
+
 # Typical journeys (not live) for when no timetable API is reachable. S3/S4 run from Darmstadt Hbf
 # through Frankfurt's S-Bahn tunnel about every 15 minutes; eastbound S-Bahn leaves Hbf (tief) from
 # track 101. Each leg: (line, from, from track, to, to track, minutes).
@@ -249,23 +446,28 @@ class Static:
 
 
 class Auto:
-    """Live timetable when reachable, static fallback otherwise, so a demo never dead-ends."""
+    """Live timetables in order when reachable, static fallback otherwise, so a demo never dead-ends."""
 
-    def __init__(self, session: requests.Session | None = None):
+    def __init__(self, session: requests.Session | None = None, *, live: list | None = None):
         # A free public API may be down for hours: fail fast (no retries, short timeout) and,
-        # after the first failure, stop asking for the rest of this run (a circuit breaker).
-        self.live, self.static = DbRest(session or requests.Session(), timeout=8), Static()
-        self.live_down = False
+        # after the first failure, stop asking that provider for the rest of this run.
+        self.lives = live if live is not None else [DbRest(session or requests.Session(), timeout=8)]
+        self.static = Static()
+        self._down: set[int] = set()
 
     def journeys(
         self, origin: Stop, destination: Stop, results: int = 3, departure: datetime | None = None
     ) -> list[Journey]:
-        if not self.live_down:
+        for i, provider in enumerate(self.lives):
+            if i in self._down:
+                continue
             try:
-                found = self.live.journeys(origin, destination, results, departure)
-                if found:
+                if found := provider.journeys(origin, destination, results, departure):
                     return found
             except (requests.RequestException, ValueError) as err:
-                self.live_down = True
-                log.warning("Live timetable unavailable (%s); using the typical timetable", err)
+                self._down.add(i)
+                if any(j not in self._down for j in range(i + 1, len(self.lives))):
+                    log.warning("Live timetable unavailable (%s); trying the next provider", err)
+                else:
+                    log.warning("Live timetable unavailable (%s); using the typical timetable", err)
         return self.static.journeys(origin, destination, results, departure)
