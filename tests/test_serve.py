@@ -46,7 +46,13 @@ def test_start_falls_back_when_port_taken(tmp_path):
 
 def test_serve_does_not_open_browser_when_asked(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr("webbrowser.open", lambda url: calls.append(url))
+    opened = threading.Event()
+
+    def _open(url):
+        calls.append(url)
+        opened.set()
+
+    monkeypatch.setattr("webbrowser.open", _open)
 
     def _stop(self):
         raise KeyboardInterrupt
@@ -57,5 +63,6 @@ def test_serve_does_not_open_browser_when_asked(tmp_path, monkeypatch):
     assert calls == []
 
     serve(tmp_path, open_browser=True)
+    assert opened.wait(5)
     assert len(calls) == 1
     assert calls[0].endswith("/plan.html")

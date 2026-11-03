@@ -8,6 +8,7 @@ Run: python -m barrierfrei.serve   (re-open the last trip map)
 import argparse
 import functools
 import logging
+import threading
 import webbrowser
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -18,7 +19,7 @@ log = logging.getLogger("barrierfrei.serve")
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
-    """A tile server that stays quiet: one DEBUG line per request, not INFO."""
+    """Serves the map page quietly: one DEBUG line per request, not INFO."""
 
     def log_message(self, format: str, *args: object) -> None:
         logging.getLogger("barrierfrei.serve").debug(format % args)
@@ -39,7 +40,8 @@ def serve(directory: Path, page: str = "plan.html", port: int = 8765, open_brows
     server, url = start(directory, port)
     log.info("Map: %s%s  (Ctrl+C to stop)", url, page)
     if open_browser:
-        webbrowser.open(f"{url}{page}")
+        # A foreground BROWSER command can block until it exits, so never let it delay serving.
+        threading.Thread(target=webbrowser.open, args=(f"{url}{page}",), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
