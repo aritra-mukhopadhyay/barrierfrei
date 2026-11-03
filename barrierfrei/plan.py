@@ -11,8 +11,10 @@ accepts a trip whose elevators work. The language model (with --explain) only ex
 import argparse
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import requests
 
@@ -565,6 +567,43 @@ def explain(plan_json: dict) -> str:
     return resp.choices[0].message.content or ""
 
 
+def make_lookup(
+    session, client_id: str, api_key: str, cache_dir: Path, outages: set[int]
+) -> Callable[[int], stations.Station]:
+    """Live FaSta elevator lookup with simulated outages applied; shared by plan and the demo site."""
+
+    def lookup(number: int) -> stations.Station:
+        station = stations.fetch_station(session, client_id, api_key, number, cache_dir)
+        return stations.with_outages(station, outages) if outages else station
+
+    return lookup
+
+
+def run_trip(
+    origin: str,
+    destination: str,
+    profile: str,
+    network,
+    provider,
+    lookup,
+    tickets: str = "regional",
+) -> tuple[dict, str, list[Option]]:
+    """One end-to-end trip: geocode, verify on the map, plan, summarise and render the map page."""
+    from barrierfrei import mapview
+
+    origin_name, *origin_point = place(origin)
+    dest_name, *dest_point = place(destination)
+    check_on_map(network, origin_name, tuple(origin_point))
+    check_on_map(network, dest_name, tuple(dest_point))
+    options = plan(
+        tuple(origin_point), tuple(dest_point), profile, network, provider, lookup, tickets=tickets
+    )
+    result = summary(options, profile, tickets=tickets)
+    result |= {"from": origin_name, "to": dest_name}
+    html = mapview.render(result, options, tuple(origin_point), tuple(dest_point))
+    return result, html, options
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -613,29 +652,16 @@ def main() -> None:
             ]
         )
     outages = set(args.out_of_service)
+    lookup = make_lookup(session, client_id, api_key, settings.data_dir / "fasta", outages)
 
-    def lookup(number: int) -> stations.Station:
-        station = stations.fetch_station(session, client_id, api_key, number, settings.data_dir / "fasta")
-        return stations.with_outages(station, outages) if outages else station
-
-    origin_name, *origin = place(args.origin)
-    dest_name, *destination = place(args.destination)
     network = routing.load_network(store.connect(settings.db_path))
-    check_on_map(network, origin_name, tuple(origin))
-    check_on_map(network, dest_name, tuple(destination))
-    options = plan(
-        tuple(origin), tuple(destination), args.profile, network, provider, lookup, tickets=args.tickets
+    result, html, options = run_trip(
+        args.origin, args.destination, args.profile, network, provider, lookup, tickets=args.tickets
     )
-
-    result = summary(options, args.profile, tickets=args.tickets)
-    result |= {"from": origin_name, "to": dest_name}
+    origin_name, dest_name = result["from"], result["to"]
     out = settings.data_dir / "plans"
     out.mkdir(parents=True, exist_ok=True)
     (out / "plan.json").write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    from barrierfrei import mapview
-
-    html = mapview.render(result, options, tuple(origin), tuple(destination))
     (out / "plan.html").write_text(html, encoding="utf-8")
 
     if not options:
