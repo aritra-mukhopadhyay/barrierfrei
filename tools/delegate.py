@@ -9,13 +9,14 @@ before anything is committed. This script is the hand-off in the middle:
   2. Runs `muse exec` headless in that worktree with the task, the repo rules from AGENTS.md
      and a step cap. Muse Code's own guardrails stay on (OS sandbox + approval policy), so a
      risky command is refused rather than run. Every event is logged to <slug>.jsonl.
-  3. Runs the repo's checks there (ruff, pytest) and writes the full diff to <slug>.diff,
-     then prints a short report.
+  3. Writes the full diff to <slug>.diff for review. The repo's checks (ruff, pytest) run
+     only when you call `check`, after reading the diff, because tests are agent-written code
+     and would run outside the sandbox.
 
 Usage (from the repo root, inside the venv):
   python tools/delegate.py run tasks/add-foo.md            # new task, slug from the file name
   python tools/delegate.py resume add-foo "Fix the failing test in test_plan.py"
-  python tools/delegate.py check add-foo                   # re-run checks + diff only
+  python tools/delegate.py check add-foo                   # after review: ruff + pytest
   python tools/delegate.py clean add-foo                   # remove worktree and branch
 
 Your key: MODEL_API_KEY from .env (or META_API_KEY from the environment) is passed to Muse Code
@@ -37,9 +38,15 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))  # import the package from this checkout
+
+from barrierfrei.config import Settings  # noqa: E402
+
 TASKS_DIR = REPO.parent / "barrierfrei-tasks"
 DEFAULT_MODEL = "muse-spark-1.3"  # Standard mode: Meta does not train on what we send.
 DEFAULT_MAX_STEPS = 60
+SECRETS = ("MODEL_API_KEY", "META_API_KEY", "MAPILLARY_TOKEN", "DB_API_KEY", "DB_CLIENT_ID")
+SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 PREAMBLE = """You are the executor on a two-agent team. A reviewer planned this task and will read
 your diff before anything is committed. Do exactly the task below, nothing more.
@@ -62,23 +69,22 @@ Task:
 
 
 def read_key() -> str:
-    """META_API_KEY from the environment, else MODEL_API_KEY from the environment or .env."""
-    for name in ("META_API_KEY", "MODEL_API_KEY"):
-        if os.environ.get(name):
-            return os.environ[name]
-    env_file = REPO / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            m = re.match(r"\s*MODEL_API_KEY\s*=\s*(.*)", line)
-            if m:
-                value = m.group(1).split(" #")[0].strip().strip("'\"")
-                if value:
-                    return value
-    sys.exit("No Meta key found: set MODEL_API_KEY in .env (or META_API_KEY in the environment).")
+    """The Meta key from the config layer: META_API_KEY if set, else MODEL_API_KEY (env or .env)."""
+    settings = Settings(_env_file=REPO / ".env")
+    secret = settings.meta_api_key or settings.model_api_key
+    if secret is None:
+        sys.exit("No Meta key found: set MODEL_API_KEY in .env (or META_API_KEY in the environment).")
+    return secret.get_secret_value()
 
 
 def git(*args: str, cwd: Path = REPO) -> str:
     return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+
+
+def validate_slug(slug: str) -> None:
+    """Slugs become paths and branch names, so reject anything that could escape TASKS_DIR."""
+    if not SLUG.fullmatch(slug):
+        sys.exit(f"Bad task name {slug!r}: use lowercase letters, digits and dashes (e.g. add-voice-input).")
 
 
 def worktree(slug: str) -> Path:
@@ -129,8 +135,9 @@ def run_muse(slug: str, prompt: str, model: str, max_steps: int, session: str | 
     cmd += ["--prompt-file", str(prompt_file)]
     if session:
         cmd += ["--session-id", session]
-    env = {**os.environ, "META_API_KEY": read_key()}
-    env.pop("MODEL_API_KEY", None)  # the agent needs only its own credential
+    key = read_key()
+    env = {k: v for k, v in os.environ.items() if k not in SECRETS}  # agent gets only its own key
+    env["META_API_KEY"] = key
     log = TASKS_DIR / f"{slug}.jsonl"
     print(f"Muse Code is working on '{slug}' (model {model}, at most {max_steps} steps)...")
     with log.open("a", encoding="utf-8") as out:
@@ -139,13 +146,28 @@ def run_muse(slug: str, prompt: str, model: str, max_steps: int, session: str | 
     return proc.returncode
 
 
+def save_diff(slug: str) -> None:
+    """Write the worktree's full diff for review. Only git runs here, no agent-written code."""
+    wt = worktree(slug)
+    git("add", "-A", "--intent-to-add", cwd=wt)  # so new files show up in the diff
+    (TASKS_DIR / f"{slug}.diff").write_text(git("diff", "HEAD", cwd=wt), encoding="utf-8")
+    print("\n--- changed files")
+    print(git("diff", "HEAD", "--stat", cwd=wt).strip() or "(no changes)")
+    print(f"\nFull diff: {TASKS_DIR / f'{slug}.diff'}")
+    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'}")
+
+
 def check(slug: str) -> bool:
-    """Run the repo's checks in the worktree and save the diff. Returns True when all pass."""
+    """Run the repo's checks in the worktree. Returns True when all pass.
+
+    This executes agent-written code (tests) on your machine outside Muse Code's sandbox, so
+    `run` and `resume` never call it: read the diff first, then run `check` yourself.
+    """
     wt = worktree(slug)
     # Put the worktree first on the import path; otherwise an editable install of the main
     # checkout would be imported and the tests would silently check the wrong code.
     env = {**os.environ, "PYTHONPATH": str(wt)}
-    for secret in ("MODEL_API_KEY", "META_API_KEY", "MAPILLARY_TOKEN", "DB_API_KEY", "DB_CLIENT_ID"):
+    for secret in SECRETS:
         env.pop(secret, None)  # tests must pass offline and without keys
     results = {}
     for name, cmd in {
@@ -158,20 +180,13 @@ def check(slug: str) -> bool:
         print(f"\n--- {name}: {'PASS' if results[name] else 'FAIL'}")
         if not results[name]:
             print("\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:]))
-    git("add", "-A", "--intent-to-add", cwd=wt)  # so new files show up in the diff
-    (TASKS_DIR / f"{slug}.diff").write_text(git("diff", "HEAD", cwd=wt), encoding="utf-8")
-    print("\n--- changed files")
-    print(git("diff", "HEAD", "--stat", cwd=wt).strip() or "(no changes)")
-    print(f"\nFull diff: {TASKS_DIR / f'{slug}.diff'}")
-    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'}")
     return all(results.values())
 
 
 def cmd_run(args: argparse.Namespace) -> int:
     task_file = Path(args.task_file)
     slug = args.slug or task_file.stem
-    if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug):
-        sys.exit("Slug must be lowercase letters, digits and dashes (e.g. add-voice-input).")
+    validate_slug(slug)
     if worktree(slug).exists():
         sys.exit(f"{worktree(slug)} already exists. Use `resume {slug} ...` or `clean {slug}` first.")
     TASKS_DIR.mkdir(exist_ok=True)
@@ -190,8 +205,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         "session": find_session_id(TASKS_DIR / f"{slug}.jsonl"),
     }
     meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
-    ok = check(slug)
-    return 0 if code == 0 and ok else 1
+    save_diff(slug)
+    print(f"\nReview the diff, then run checks: python tools/delegate.py check {slug}")
+    return code
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -202,8 +218,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if not session:
         sys.exit(f"No session id found in {args.slug}.jsonl; pass one with --session.")
     code = run_muse(args.slug, args.message, args.model or meta["model"], args.max_steps, session)
-    ok = check(args.slug)
-    return 0 if code == 0 and ok else 1
+    save_diff(args.slug)
+    print(f"\nReview the diff, then run checks: python tools/delegate.py check {args.slug}")
+    return code
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -251,6 +268,8 @@ def main() -> int:
     p.set_defaults(func=cmd_clean)
 
     args = parser.parse_args()
+    if getattr(args, "slug", None):
+        validate_slug(args.slug)
     return args.func(args)
 
 
