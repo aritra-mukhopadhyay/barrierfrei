@@ -1,11 +1,14 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]  # 77+ for the PEP 639 licence fields below
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "barrierfrei"
 version = "0.1.0"
-description = "Step-free route agent: street photos + OpenStreetMap + live elevator status, fused by Meta models"
+description = "Step-free public-transport trips: OpenStreetMap walks, street photos read by Meta models, live lift status"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "openai>=1.40,<4",

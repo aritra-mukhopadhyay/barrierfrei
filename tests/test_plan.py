@@ -981,3 +981,13 @@ def test_why_best_handles_midnight_arrival():
         "arrive_at": "23:50",
     }
     assert "arrives 23 min later" in mapview._why_best(late, [late, early])
+
+
+def test_run_trip_returns_result_and_map():
+    origin, dest = f"{ORIGIN[1]},{ORIGIN[0]}", f"{ZEIL[1]},{ZEIL[0]}"
+    result, page, options = plan.run_trip(
+        origin, dest, "wheelchair", network(), transit.Static(), lookup_with()
+    )
+    assert result["from"] == origin and result["to"] == dest
+    assert options and result["options"][0]["usable"]
+    assert "leaflet" in page and "tile.openstreetmap.org" in page
