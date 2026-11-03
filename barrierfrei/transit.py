@@ -50,6 +50,7 @@ class Stop:
     note: str = ""  # what our live data does not cover here
     street_verified: bool = True  # False when the street-to-concourse lifts are not in DB's data
     entrances: tuple[Entrance, ...] = ()  # where a step-free walk should start or end
+    level_tracks: frozenset[str] = frozenset()  # tracks reached from the street without any lift
 
 
 # Stations near our two walking areas. FaSta numbers come from the FaSta API itself; stations without
@@ -78,6 +79,8 @@ STOPS = [
             Entrance("north exit (Ausgang Nord)", 8.662313, 50.107988, 441774639),
             Entrance("south exit (Ausgang Süd)", 8.664210, 50.105929, 441774641),
         ),
+        # Terminus tracks in the main hall, level with the north and south exits.
+        level_tracks=frozenset(str(n) for n in range(1, 25)),
     ),
     Stop(
         "Frankfurt (Main) Taunusanlage",

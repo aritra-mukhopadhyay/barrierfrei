@@ -549,3 +549,41 @@ def test_check_on_map_suggests_containing_area(caplog):
     with caplog.at_level(logging.INFO, logger="barrierfrei.plan"), pytest.raises(SystemExit):
         plan.check_on_map(network(), "Mathildenhöhe", point)
     assert "--area darmstadt-centre" in caplog.text
+
+
+def test_frankfurt_hbf_main_hall_tracks_need_no_lift():
+    def lookup(number):
+        raise AssertionError("FaSta must not be called for level tracks")
+
+    check = plan.check_station("Frankfurt (Main) Hbf", "12", lookup)
+    assert check.status == "ok"
+    assert "level access" in check.reason
+    assert check.use == []
+    deep = plan.check_station("Frankfurt (Main) Hbf", "101", lookup_with())
+    assert [e.equipment for e in deep.use] == [10561326, 10955285]
+
+
+def test_missing_lift_data_is_unverified_not_broken():
+    data = {
+        "stationnumber": 1126,
+        "facilities": [
+            {
+                "equipmentnumber": 10543460,
+                "type": "ELEVATOR",
+                "state": "ACTIVE",
+                "description": "zu Gleis 5",
+                "geocoordX": DARMSTADT_LIFT[0],
+                "geocoordY": DARMSTADT_LIFT[1],
+            }
+        ],
+    }
+
+    def lookup(number, outages=frozenset()):
+        assert number == 1126
+        return stations.with_outages(stations.parse_station(data, 0), set(outages))
+
+    check = plan.check_station("Darmstadt Hbf", "7", lookup)
+    assert check.status == "unverified"
+    assert "no elevator listed for track 7" in check.reason
+    broken = plan.check_station("Darmstadt Hbf", "5", lambda n: lookup(n, {10543460}))
+    assert broken.status == "broken"

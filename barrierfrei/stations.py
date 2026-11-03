@@ -63,6 +63,7 @@ class Access:
     use: list[Elevator] = field(default_factory=list)  # working elevators on the way
     broken: list[Elevator] = field(default_factory=list)  # relevant elevators that are out of service
     reason: str = ""
+    no_data: bool = False
 
 
 def parse_station(data: dict, fetched_at: float, stale: bool = False) -> Station:
@@ -128,7 +129,7 @@ def access(station: Station, track: str | None = None, transfer: bool = False) -
     descriptions, so the result says why.
     """
     if not station.elevators:
-        return Access(station, False, reason="no elevators listed")
+        return Access(station, False, reason="no elevators listed", no_data=True)
     platform_lifts = [e for e in station.elevators if e.tracks]
     general = [e for e in station.elevators if not e.tracks]
     if platform_lifts:
@@ -155,5 +156,6 @@ def access(station: Station, track: str | None = None, transfer: bool = False) -
         else:
             missing.append(f"every elevator for {label} is out of service")
     if missing:
-        return Access(station, False, use, broken, "; ".join(missing))
+        no_data = all(m.startswith("no elevator listed") for m in missing)
+        return Access(station, False, use, broken, "; ".join(missing), no_data)
     return Access(station, True, use, broken, "stale status" if station.stale else "")

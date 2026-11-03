@@ -203,6 +203,10 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
     stop = transit.find_stop(name)
     if stop is None or stop.fasta is None:
         return StationCheck(name, platform, "unverified", "no live elevator data for this stop")
+    if platform in stop.level_tracks:
+        return StationCheck(
+            name, platform, "ok", "level access from the platform to the exits, no lift needed"
+        )
     station = lookup(stop.fasta)
     station.elevators = [
         e
@@ -214,7 +218,7 @@ def check_station(name: str, platform: str | None, lookup, transfer: bool = Fals
         return StationCheck(name, platform, "unverified", stop.note or "no elevators in DB's live data")
     result = stations.access(station, platform, transfer)
     if not result.ok:
-        status = "broken"
+        status = "unverified" if result.no_data else "broken"
     elif transfer or stop.street_verified:
         status = "ok"
     else:  # the platform lift works, but the way up to the street is someone else's lift
