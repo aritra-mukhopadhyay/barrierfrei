@@ -35,10 +35,10 @@ PAGE = """<!doctype html>
 const data = {data};
 function draw(id, part) {{
   const map = L.map(id);
-  // OSM's own tiles need a Referer header, which file:// pages don't send.
-  // Use CARTO's Voyager basemap (same OSM data) so tiles load from disk.
-  L.tileLayer("https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png",
-    {{maxZoom: 20, subdomains: "abcd", attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors &copy; <a href='https://carto.com/attributions'>CARTO</a>"}}).addTo(map);
+  // OSM's tiles (CARTO's answered "API key required" on 2026-11-03). If a viewer shows "Access blocked" for a
+  // file:// page, serve it: python -m http.server -d data/plans 8765.
+  L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
+    {{maxZoom: 19, attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors"}}).addTo(map);
   const ll = c => [c[1], c[0]];
   const bounds = [];
   (part.direct || []).forEach(line => L.polyline(line.map(ll), {{color: "#888", dashArray: "6 6", weight: 3}}).addTo(map));
