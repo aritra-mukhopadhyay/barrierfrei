@@ -79,6 +79,7 @@ class Option:
     problems: list[str] = field(default_factory=list)  # e.g. "train leaves before you reach the station"
     board_via: str = ""  # which station door the walks use
     alight_via: str = ""
+    later: list[datetime] = field(default_factory=list)  # first-ride departures of same trips merged here
 
     @property
     def usable(self) -> bool:
@@ -110,6 +111,22 @@ class Option:
     def walks(self) -> list[routing.WalkRoute]:
         """The walks to and from the stations; walks between trains are already in the journey."""
         return [w for w in (self.walk_start, self.walk_end) if w]
+
+    @property
+    def leave_at(self) -> datetime | None:
+        """When to leave: the first departure minus the walk to the station and the lift buffer."""
+        rides = self.journey.rides
+        if not rides or rides[0].departure is None or self.walk_start is None:
+            return None
+        return rides[0].departure - timedelta(minutes=walk_minutes(self.walk_start) + BOARDING_BUFFER_MIN)
+
+    @property
+    def arrive_at(self) -> datetime | None:
+        """When you reach the destination: the last arrival plus the walk from the station."""
+        rides = self.journey.rides
+        if not rides or rides[-1].arrival is None or self.walk_end is None:
+            return None
+        return rides[-1].arrival + timedelta(minutes=walk_minutes(self.walk_end))
 
     @property
     def minutes(self) -> float:
@@ -336,12 +353,45 @@ def plan(
                     if departure < arrive:
                         option.problems.append("the train leaves before you can reach the platform")
                 options.append(option)
-    return rank(options)
+    return collapse(rank(options))
 
 
 def rank(options: list[Option]) -> list[Option]:
     """Usable first; among those, a slower trip we could fully verify beats a faster one we couldn't."""
     return sorted(options, key=lambda o: (not o.usable, not o.verified, o.score))
+
+
+def collapse(options: list[Option]) -> list[Option]:
+    """Merge departures of the same trip into one card, keeping the earliest departure.
+
+    A different platform can mean a different lift, so it stays a separate card; so does a trip
+    whose doors, usability or verification differ. Groups keep the position of their best-ranked
+    member, and the kept card lists the other departures in `later`.
+    """
+
+    def key(option: Option):
+        rides = tuple(
+            (r.line, r.origin, r.destination, r.origin_platform, r.destination_platform)
+            for r in option.journey.rides
+        )
+        return (rides, option.board_via, option.alight_via, option.usable, option.verified)
+
+    def departs(option: Option):
+        rides = option.journey.rides
+        return rides[0].departure if rides else None
+
+    groups: dict[tuple, list[Option]] = {}
+    for option in options:
+        groups.setdefault(key(option), []).append(option)
+    merged = []
+    for group in groups.values():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        kept = min(group, key=lambda o: ((d := departs(o)) is not None, d))
+        kept.later = sorted(d for o in group if o is not kept and (d := departs(o)) is not None)
+        merged.append(kept)
+    return merged
 
 
 def lift_text(check: StationCheck, lift: stations.Elevator) -> str:
@@ -367,6 +417,9 @@ def summary(options: list[Option], profile: str) -> dict:
                 "usable": o.usable,
                 "fully_verified": o.verified,
                 "minutes": round(o.minutes),
+                "leave_at": o.leave_at.strftime("%H:%M") if o.leave_at else None,
+                "arrive_at": o.arrive_at.strftime("%H:%M") if o.arrive_at else None,
+                "later_departures": [d.strftime("%H:%M") for d in o.later],
                 "timetable": o.journey.source,
                 "rides": [
                     {
@@ -498,7 +551,11 @@ def main() -> None:
     for i, option in enumerate(result["options"], 1):
         rides = ", ".join(f"{r['line']} {r['from']} -> {r['to']}" for r in option["rides"])
         flag = ("OK " if option["fully_verified"] else "OK?") if option["usable"] else "NO "
-        log.info("%s option %d: %d min, %s", flag, i, option["minutes"], rides)
+        dep = option["rides"][0]["departure"]
+        extra = f", dep {dep[11:16]}" if dep else ""
+        if option["leave_at"]:
+            extra += f", leave {option['leave_at']}"
+        log.info("%s option %d: %d min%s, %s", flag, i, option["minutes"], extra, rides)
         for s in option["stations"]:
             log.info("      %s %s: %s %s", s["role"], s["name"], s["status"], s["reason"])
         for problem in option["problems"]:

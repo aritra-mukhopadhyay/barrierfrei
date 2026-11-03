@@ -310,3 +310,14 @@ def test_timetables_line_label_already_has_category():
     provider = transit.DbTimetables(_TimetablesFake(origin_board, dest_board), "id", "key")
     (journey,) = provider.journeys(darmstadt, taunusanlage, departure=departure)
     assert journey.legs[0].line == "S6"
+
+
+def test_static_lines_match_live_pattern():
+    darmstadt = transit.find_stop("Darmstadt Hbf")
+    for name in (
+        "Frankfurt (Main) Hauptwache",
+        "Frankfurt (Main) Konstablerwache",
+        "Frankfurt (Main) Taunusanlage",
+    ):
+        journeys = transit.Static().journeys(darmstadt, transit.find_stop(name))
+        assert journeys[0].rides[0].line == "S6"
