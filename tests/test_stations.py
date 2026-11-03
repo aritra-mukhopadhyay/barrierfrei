@@ -125,3 +125,14 @@ def test_unknown_platform_still_needs_the_street_lift():
     station = stations.with_outages(stations.parse_station(FRANKFURT_HBF, 0), {10955285})
     assert not stations.access(station).ok
     assert stations.access(station, transfer=True).ok
+
+
+def test_access_no_data_flag():
+    station = stations.parse_station(DARMSTADT, 0)
+    missing = stations.access(station, "7")
+    assert not missing.ok and missing.no_data
+    out = stations.with_outages(station, {10543453})
+    broken = stations.access(out, "3")
+    assert not broken.ok and not broken.no_data
+    ok = stations.access(station, "3")
+    assert ok.ok and not ok.no_data

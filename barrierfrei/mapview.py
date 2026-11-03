@@ -12,7 +12,7 @@ PAGE = """<!doctype html>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-  body {{ margin: 0; font: 15px/1.4 system-ui, sans-serif; display: flex; height: 100vh; }}
+  body {{ margin: 0; font: 15px/1.4 system-ui, sans-serif; display: flex; height: 100vh; background: #fff; color: #222; }}
   #panel {{ width: 380px; overflow-y: auto; padding: 16px; box-sizing: border-box; border-right: 1px solid #ddd; }}
   #maps {{ flex: 1; display: grid; grid-template-rows: 1fr 1fr; }}
   .map {{ min-height: 200px; }}
