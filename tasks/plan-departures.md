@@ -22,7 +22,8 @@ In `barrierfrei/plan.py`:
 3. New function `collapse(options: list[Option]) -> list[Option]`, called on the result of
    `rank(options)` at the end of `plan()` (so `plan()` returns `collapse(rank(options))`).
    Two options are the same trip when these are all equal: the tuple of `(leg.line, leg.origin,
-   leg.destination)` over `journey.rides`, `board_via`, `alight_via`, `usable` and `verified`.
+   leg.destination, leg.origin_platform, leg.destination_platform)` over `journey.rides` (a different
+   platform can mean a different lift, so it must stay a separate card), `board_via`, `alight_via`, `usable` and `verified`.
    For each group, in the position of its best-ranked member, keep the member whose first ride
    departs earliest (a `None` departure counts as earliest), and set its `later` to the sorted
    first-ride departures of the other members (skip `None`). Groups of one are unchanged.
@@ -52,7 +53,8 @@ In `tests/test_plan.py` (no network, no keys; reuse the existing fixtures and he
   `later == [13:05, 13:35]`; an option to a different destination stays separate and keeps its position.
 - `test_collapse_keeps_verified_and_unverified_apart`: same trip, one verified and one not, stays two options.
 - `test_leave_and_arrive_times`: with a known departure, arrival, start walk and end walk, `leave_at`
-  and `arrive_at` are as computed above; without a departure both are `None`.
+  and `arrive_at` are as computed above; without a first-ride departure `leave_at` is `None` (and
+  `arrive_at` still set); without a last-ride arrival `arrive_at` is `None` (and `leave_at` still set).
 - Extend `test_summary_and_map_render`: the summary options have the keys `leave_at`, `arrive_at`,
   `later_departures`.
 - `test_option_html_shows_leave_time_and_later`: `mapview._option_html` on a summary-shaped dict with
