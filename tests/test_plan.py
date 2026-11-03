@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 from barrierfrei import mapview, plan, stations, transit
@@ -510,3 +512,40 @@ def test_new_areas_contain_old_ones():
         west, south, east, north = AREAS[old]
         big_west, big_south, big_east, big_north = AREAS[new]
         assert big_west <= west and big_south <= south and big_east >= east and big_north >= north
+
+
+def test_places_reach_a_station():
+    for label, lon, lat in plan.PLACES.values():
+        assert any(
+            plan.routing.haversine_m((lon, lat), (s.lon, s.lat)) <= plan.MAX_STATION_WALK_M
+            for s in transit.STOPS
+        ), label
+    west, south, east, north = AREAS["frankfurt-centre"]
+    for label, lon, lat in plan.PLACES.values():
+        if west <= lon <= east and south <= lat <= north:
+            assert any(
+                plan.routing.haversine_m((lon, lat), (s.lon, s.lat)) <= plan.MAX_DESTINATION_WALK_M
+                for s in transit.STOPS
+            ), label
+
+
+def test_check_on_map():
+    net = network()
+    plan.check_on_map(net, "origin", ORIGIN)  # on a mapped node
+    with pytest.raises(SystemExit) as exc:
+        plan.check_on_map(net, "far", (ORIGIN[0], ORIGIN[1] - 0.009))  # ~1 km away
+    assert exc.value.code == 2
+    with pytest.raises(SystemExit) as exc:
+        plan.check_on_map(Network({}, {}), "empty", ORIGIN)
+    assert exc.value.code == 2
+    plan.check_on_map(net, "near", (ORIGIN[0], ORIGIN[1] - 0.00225))  # ~250 m: inside
+    with pytest.raises(SystemExit) as exc:
+        plan.check_on_map(net, "over", (ORIGIN[0], ORIGIN[1] - 0.00315))  # ~350 m: outside
+    assert exc.value.code == 2
+
+
+def test_check_on_map_suggests_containing_area(caplog):
+    point = (8.6668, 49.8770)  # inside darmstadt-centre, far from the test network
+    with caplog.at_level(logging.INFO, logger="barrierfrei.plan"), pytest.raises(SystemExit):
+        plan.check_on_map(network(), "Mathildenhöhe", point)
+    assert "--area darmstadt-centre" in caplog.text

@@ -28,7 +28,7 @@ PLACES = {
     "zeil": ("Zeil, Frankfurt", 8.6826, 50.1144),
     "hauptwache": ("Hauptwache, Frankfurt", 8.6787, 50.1140),
     "tu-darmstadt": ("TU Darmstadt, Karolinenplatz", 8.6566, 49.8749),
-    "mathildenhoehe": ("Mathildenhöhe, Darmstadt", 8.6668, 49.8770),
+    "darmstadtium": ("darmstadtium congress centre, Darmstadt", 8.6587, 49.8745),
     "staatstheater": ("Staatstheater Darmstadt", 8.6505, 49.8680),
     "herrngarten": ("Herrngarten, Darmstadt", 8.6545, 49.8780),
     "frankfurt-hbf": ("Frankfurt (Main) Hbf", 8.6631, 50.1069),
@@ -169,6 +169,31 @@ def place(text: str) -> tuple[str, float, float]:
     except ValueError:
         raise SystemExit(f"unknown place '{text}': use one of {sorted(PLACES)} or 'lat,lon'") from None
     return text, lon, lat
+
+
+def check_on_map(network: routing.Network, name: str, point: tuple[float, float]) -> None:
+    """Stop when a point lies beyond the streets we have ingested, before any API call.
+
+    Without this, a far-away point would silently snap to the nearest mapped street.
+    """
+    dist = routing.distance_to_network_m(network, point)
+    if dist <= MAX_OFF_MAP_M:
+        return
+    lon, lat = point
+    hits = [key for key, (w, s, e, n) in AREAS.items() if w <= lon <= e and s <= lat <= n]
+    hits.sort(key=lambda k: (not k.endswith("-centre"), k))
+    if hits:
+        area = f"--area {hits[0]}"
+    else:
+        area = f"--area <name> (one of: {', '.join(sorted(AREAS))})"
+    log.error(
+        "%s is outside our map (nearest mapped path is %.0f m away). "
+        "Ingest that area first: python -m barrierfrei.ingest %s",
+        name,
+        dist,
+        area,
+    )
+    raise SystemExit(2)
 
 
 MAX_ELEVATOR_OFFSET_M = 500  # FaSta has a few bad coordinates; ignore positions this far from the station
@@ -556,17 +581,8 @@ def main() -> None:
     origin_name, *origin = place(args.origin)
     dest_name, *destination = place(args.destination)
     network = routing.load_network(store.connect(settings.db_path))
-    for name, point in ((origin_name, tuple(origin)), (dest_name, tuple(destination))):
-        dist = routing.distance_to_network_m(network, point)
-        if dist > MAX_OFF_MAP_M:
-            log.error(
-                "%s is outside our map (nearest mapped path is %.0f m away). "
-                "Ingest that area first: python -m barrierfrei.ingest --area %s",
-                name,
-                dist,
-                "/".join(sorted(AREAS)),
-            )
-            raise SystemExit(2)
+    check_on_map(network, origin_name, tuple(origin))
+    check_on_map(network, dest_name, tuple(destination))
     options = plan(tuple(origin), tuple(destination), args.profile, network, provider, lookup)
 
     result = summary(options, args.profile)
