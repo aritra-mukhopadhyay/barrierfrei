@@ -386,8 +386,9 @@ class DbTimetables:
             arrival = arrivals[0]
             dest_platform = next(p for a, p in matches if a == arrival)
             mode = "suburban" if c == "S" else "regional" if c in ("RE", "RB") else "national"
-            line_number = dp.get("l")
-            line = f"{c}{line_number}" if line_number else f"{c} {n}"
+            # Real boards give l="S6" (category included); some give only the number.
+            label = dp.get("l")
+            line = (label if not label.isdigit() else f"{c}{label}") if label else f"{c} {n}"
             cp = changed_dp.get("cp") if changed_dp is not None else None
             leg = Leg(
                 mode=mode,

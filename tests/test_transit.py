@@ -302,3 +302,11 @@ def test_timetables_missing_hour_is_empty():
     provider = transit.DbTimetables(MissingHour(origin_board, dest_board), "id", "key")
     (journey,) = provider.journeys(darmstadt, taunusanlage, departure=departure)
     assert journey.legs[0].line == "S3"
+
+
+def test_timetables_line_label_already_has_category():
+    darmstadt, taunusanlage, departure, origin_board, dest_board = _taunusanlage_trip()
+    origin_board = origin_board.replace('l="3"', 'l="S6"')  # as the real API sends it
+    provider = transit.DbTimetables(_TimetablesFake(origin_board, dest_board), "id", "key")
+    (journey,) = provider.journeys(darmstadt, taunusanlage, departure=departure)
+    assert journey.legs[0].line == "S6"
