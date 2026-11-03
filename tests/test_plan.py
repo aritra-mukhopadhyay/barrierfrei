@@ -433,3 +433,50 @@ def test_option_html_shows_leave_time_and_later():
     assert "Leave at 12:02" in page
     assert "arrive about 13:39" in page
     assert "Same trip later: 13:05" in page
+
+
+def test_earliest_uses_entrance_doors_not_pin():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    net = network()
+    graph = plan.routing.build_graph(net, "wheelchair")
+    darmstadt = transit.find_stop("Darmstadt Hbf")
+    pin = plan.best_walk(net, graph, ORIGIN, [((darmstadt.lon, darmstadt.lat), False, "")], True)[0]
+    doors = [
+        plan.best_walk(net, graph, ORIGIN, [((e.lon, e.lat), True, e.name)], True)[0]
+        for e in darmstadt.entrances
+    ]
+    gap = min(plan.walk_minutes(d) for d in doors) - plan.walk_minutes(pin)
+    assert gap > 0  # the pin is closer than any door in this fixture
+    early = now + timedelta(minutes=plan.walk_minutes(pin) + plan.BOARDING_BUFFER_MIN + gap / 2)
+    late = now + timedelta(minutes=plan.walk_minutes(pin) + plan.BOARDING_BUFFER_MIN + gap + 5)
+
+    class Since:
+        """A provider offering fixed departures at or after the requested time, like the live ones."""
+
+        def journeys(self, origin, destination, results=3, departure=None):
+            if (origin.name, destination.name) != ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"):
+                return []
+            found = []
+            for departs in (early, late):
+                if departure is not None and departs < departure:
+                    continue
+                leg = transit.Leg(
+                    "suburban",
+                    "S3",
+                    origin.name,
+                    destination.name,
+                    departs,
+                    departs + timedelta(minutes=37),
+                    None,
+                    None,
+                    37,
+                )
+                found.append(transit.Journey([leg], "test"))
+            return found[:results]
+
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", net, Since(), lookup_with(), now)
+    assert len(options) == 1
+    assert options[0].journey.rides[0].departure == late
+    assert not any("train leaves before" in p for p in options[0].problems)

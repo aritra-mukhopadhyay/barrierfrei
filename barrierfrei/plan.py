@@ -293,12 +293,12 @@ def plan(
 
     options = []
     for start in starts:
-        # Ask for trains we can actually catch. The door we finally use depends on the platform, which
-        # we only learn from the journey, so ask from the quickest way in: a train that turns out to
-        # be too early for the door we use is rejected below, and we never hide a catchable one.
-        ways_in = [((start.lon, start.lat), False, "")] + [
-            ((e.lon, e.lat), True, e.name) for e in start.entrances
-        ]
+        # Ask for trains we can actually catch. The walk always ends at an entrance door, so ask
+        # from the quickest door in; the pin only marks the area and would admit trains the real
+        # walk misses. The door we finally use depends on the platform, which we only learn from
+        # the journey, so a train that turns out too early is rejected below.
+        doors_in = [((e.lon, e.lat), True, e.name) for e in start.entrances]
+        ways_in = doors_in or [((start.lon, start.lat), False, "")]
         quickest = [w for door in ways_in if (w := best_walk(network, graph, origin, [door], True))]
         approach = min((w[0] for w in quickest), key=walk_minutes, default=None)
         earliest = now + timedelta(minutes=walk_minutes(approach) + BOARDING_BUFFER_MIN)
