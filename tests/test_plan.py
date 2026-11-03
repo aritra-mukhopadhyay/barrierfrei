@@ -111,6 +111,7 @@ def test_summary_and_map_render():
     )  # test stations are all unverifiable
     # CARTO's basemaps now require an API key; OSM's own tiles load (checked in Chrome and Edge).
     assert "tile.openstreetmap.org" in page and "cartocdn.com" not in page
+    assert 'location.protocol === "file:"' in page
 
 
 def test_place_parsing():

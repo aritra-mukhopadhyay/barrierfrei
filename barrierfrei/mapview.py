@@ -36,9 +36,20 @@ const data = {data};
 function draw(id, part) {{
   const map = L.map(id);
   // OSM's tiles (CARTO's answered "API key required" on 2026-11-03). If a viewer shows "Access blocked" for a
-  // file:// page, serve it: python -m http.server -d data/plans 8765.
+  // file:// page (no Referer), so plan.py serves it on 127.0.0.1; re-open with python -m barrierfrei.serve.
   L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
     {{maxZoom: 19, attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors"}}).addTo(map);
+  if (location.protocol === "file:") {{
+    const notice = L.control({{position: "topright"}});
+    notice.onAdd = () => {{
+      const div = L.DomUtil.create("div");
+      div.style.background = "white";
+      div.style.padding = "8px";
+      div.textContent = "The map background needs the page served: run python -m barrierfrei.serve";
+      return div;
+    }};
+    notice.addTo(map);
+  }}
   const ll = c => [c[1], c[0]];
   const bounds = [];
   (part.direct || []).forEach(line => L.polyline(line.map(ll), {{color: "#888", dashArray: "6 6", weight: 3}}).addTo(map));
