@@ -76,9 +76,10 @@ class Option:
     walk_end: routing.WalkRoute | None = None
     avoided: list[str] = field(default_factory=list)
     direct_walk: list[list[tuple[float, float]]] = field(default_factory=list)
-    problems: list[str] = field(default_factory=list)  # e.g. "train leaves before you reach the station"
+    problems: list[str] = field(default_factory=list)  # e.g. "no step-free walk found to the station"
     board_via: str = ""  # which station door the walks use
     alight_via: str = ""
+    later: list[datetime] = field(default_factory=list)  # first-ride departures of same trips merged here
 
     @property
     def usable(self) -> bool:
@@ -110,6 +111,22 @@ class Option:
     def walks(self) -> list[routing.WalkRoute]:
         """The walks to and from the stations; walks between trains are already in the journey."""
         return [w for w in (self.walk_start, self.walk_end) if w]
+
+    @property
+    def leave_at(self) -> datetime | None:
+        """When to leave: the first departure minus the walk to the station and the lift buffer."""
+        rides = self.journey.rides
+        if not rides or rides[0].departure is None or self.walk_start is None:
+            return None
+        return rides[0].departure - timedelta(minutes=walk_minutes(self.walk_start) + BOARDING_BUFFER_MIN)
+
+    @property
+    def arrive_at(self) -> datetime | None:
+        """When you reach the destination: the last arrival plus the walk from the station."""
+        rides = self.journey.rides
+        if not rides or rides[-1].arrival is None or self.walk_end is None:
+            return None
+        return rides[-1].arrival + timedelta(minutes=walk_minutes(self.walk_end))
 
     @property
     def minutes(self) -> float:
@@ -276,12 +293,21 @@ def plan(
 
     options = []
     for start in starts:
-        # Ask for trains we can actually catch. The door we finally use depends on the platform, which
-        # we only learn from the journey, so ask from the quickest way in: a train that turns out to
-        # be too early for the door we use is rejected below, and we never hide a catchable one.
-        ways_in = [((start.lon, start.lat), False, "")] + [
-            ((e.lon, e.lat), True, e.name) for e in start.entrances
+        # Ask for trains we can actually catch. The walk may end at an entrance door or a street
+        # lift, and we only learn which from the journey, so ask from the quickest way in: this
+        # keeps the cutoff conservative and never hides a catchable train. A train the chosen
+        # door still misses is skipped below; the pin is only the last resort.
+        try:
+            lifts = station_lookup(start.fasta).elevators if start.fasta else []
+        except Exception:  # without live data the doors alone still give a cutoff
+            lifts = []
+        doors_in = [((e.lon, e.lat), True, e.name) for e in start.entrances]
+        doors_in += [
+            ((lift.lon, lift.lat), True, lift.description or "the street lift")
+            for lift in lifts
+            if lift.lon is not None and lift.lat is not None
         ]
+        ways_in = doors_in or [((start.lon, start.lat), False, "")]
         quickest = [w for door in ways_in if (w := best_walk(network, graph, origin, [door], True))]
         approach = min((w[0] for w in quickest), key=walk_minutes, default=None)
         earliest = now + timedelta(minutes=walk_minutes(approach) + BOARDING_BUFFER_MIN)
@@ -334,14 +360,47 @@ def plan(
                 if departure and option.walk_start:
                     arrive = now + timedelta(minutes=walk_minutes(option.walk_start) + BOARDING_BUFFER_MIN)
                     if departure < arrive:
-                        option.problems.append("the train leaves before you can reach the platform")
+                        continue  # a train you cannot catch is not an option
                 options.append(option)
-    return rank(options)
+    return collapse(rank(options))
 
 
 def rank(options: list[Option]) -> list[Option]:
     """Usable first; among those, a slower trip we could fully verify beats a faster one we couldn't."""
     return sorted(options, key=lambda o: (not o.usable, not o.verified, o.score))
+
+
+def collapse(options: list[Option]) -> list[Option]:
+    """Merge departures of the same trip into one card, keeping the earliest departure.
+
+    A different platform can mean a different lift, so it stays a separate card; so does a trip
+    whose doors, usability or verification differ. Groups keep the position of their best-ranked
+    member, and the kept card lists the other departures in `later`.
+    """
+
+    def key(option: Option):
+        rides = tuple(
+            (r.line, r.origin, r.destination, r.origin_platform, r.destination_platform)
+            for r in option.journey.rides
+        )
+        return (rides, option.board_via, option.alight_via, option.usable, option.verified)
+
+    def departs(option: Option):
+        rides = option.journey.rides
+        return rides[0].departure if rides else None
+
+    groups: dict[tuple, list[Option]] = {}
+    for option in options:
+        groups.setdefault(key(option), []).append(option)
+    merged = []
+    for group in groups.values():
+        if len(group) == 1:
+            merged.append(group[0])
+            continue
+        kept = min(group, key=lambda o: ((d := departs(o)) is not None, d))
+        kept.later = sorted(d for o in group if o is not kept and (d := departs(o)) is not None)
+        merged.append(kept)
+    return merged
 
 
 def lift_text(check: StationCheck, lift: stations.Elevator) -> str:
@@ -367,6 +426,9 @@ def summary(options: list[Option], profile: str) -> dict:
                 "usable": o.usable,
                 "fully_verified": o.verified,
                 "minutes": round(o.minutes),
+                "leave_at": o.leave_at.strftime("%H:%M") if o.leave_at else None,
+                "arrive_at": o.arrive_at.strftime("%H:%M") if o.arrive_at else None,
+                "later_departures": [d.strftime("%H:%M") for d in o.later],
                 "timetable": o.journey.source,
                 "rides": [
                     {
@@ -498,7 +560,11 @@ def main() -> None:
     for i, option in enumerate(result["options"], 1):
         rides = ", ".join(f"{r['line']} {r['from']} -> {r['to']}" for r in option["rides"])
         flag = ("OK " if option["fully_verified"] else "OK?") if option["usable"] else "NO "
-        log.info("%s option %d: %d min, %s", flag, i, option["minutes"], rides)
+        dep = option["rides"][0]["departure"]
+        extra = f", dep {dep[11:16]}" if dep else ""
+        if option["leave_at"]:
+            extra += f", leave {option['leave_at']}"
+        log.info("%s option %d: %d min%s, %s", flag, i, option["minutes"], extra, rides)
         for s in option["stations"]:
             log.info("      %s %s: %s %s", s["role"], s["name"], s["status"], s["reason"])
         for problem in option["problems"]:

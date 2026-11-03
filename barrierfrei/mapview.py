@@ -120,6 +120,16 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     avoided = option["avoided_on_shortest_path"]
     avoided_html = f"<p><small>Avoided: {html.escape(', '.join(avoided))}</small></p>" if avoided else ""
     cls = "opt best" if best else ("opt" if option["usable"] else "opt bad")
+    leave = option.get("leave_at")
+    arrive = option.get("arrive_at")
+    leave_html = ""
+    if leave:
+        leave_html = f"<p><b>Leave at {html.escape(leave)}</b>"
+        if arrive:
+            leave_html += f", arrive about {html.escape(arrive)}"
+        leave_html += "</p>"
+    later = option.get("later_departures") or []
+    later_html = f"<p><small>Same trip later: {html.escape(', '.join(later))}</small></p>" if later else ""
     head = "Recommended" if best else ("Alternative" if option["usable"] else "Not step-free right now")
     if best and not option["fully_verified"]:
         head = "Best we can offer"
@@ -130,9 +140,9 @@ def _option_html(option: dict, best: bool, why: str = "") -> str:
     elif option["usable"] and not option["fully_verified"]:
         head += " <small class='unverified'>(some parts can't be checked)</small>"
     return (
-        f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min{why}"
-        f"<br><small>{html.escape(option['timetable'])}</small>"
-        f"<ul>{''.join(walks[:1])}{rides}{''.join(walks[1:])}</ul><b>Elevators</b><ul>{checks}</ul><ul>{problems}</ul>{avoided_html}</div>"
+        f"<div class='{cls}'><b>{head}</b> &middot; about {option['minutes']} min{why}{leave_html}"
+        f"{'<br>' if not leave_html else ''}<small>{html.escape(option['timetable'])}</small>"
+        f"<ul>{''.join(walks[:1])}{rides}{''.join(walks[1:])}</ul>{later_html}<b>Elevators</b><ul>{checks}</ul><ul>{problems}</ul>{avoided_html}</div>"
     )
 
 

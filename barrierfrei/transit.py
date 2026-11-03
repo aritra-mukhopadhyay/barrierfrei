@@ -407,22 +407,23 @@ class DbTimetables:
         return [journey for _, journey in found[:results]]
 
 
-# Typical journeys (not live) for when no timetable API is reachable. S3/S4 run from Darmstadt Hbf
-# through Frankfurt's S-Bahn tunnel about every 15 minutes; eastbound S-Bahn leaves Hbf (tief) from
-# track 101. Each leg: (line, from, from track, to, to track, minutes).
+# Typical journeys (not live) for when no timetable API is reachable. The S6 runs from Darmstadt Hbf
+# at :05 and :35 and enters Frankfurt's S-Bahn tunnel from Frankfurt Süd, as seen in DB Timetables
+# on 2026-11-03; eastbound S-Bahn leaves Hbf (tief) from track 101.
+# Each leg: (line, from, from track, to, to track, minutes).
 STATIC_JOURNEYS = {
     ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"): [
-        [("S3/S4", "Darmstadt Hbf", None, "Frankfurt (Main) Hauptwache", None, 37)],
+        [("S6", "Darmstadt Hbf", None, "Frankfurt (Main) Hauptwache", None, 35)],
         [
             ("RE / RB", "Darmstadt Hbf", None, "Frankfurt (Main) Hbf", None, 18),
             ("S-Bahn", "Frankfurt (Main) Hbf", "101", "Frankfurt (Main) Hauptwache", None, 4),
         ],
     ],
     ("Darmstadt Hbf", "Frankfurt (Main) Konstablerwache"): [
-        [("S3/S4", "Darmstadt Hbf", None, "Frankfurt (Main) Konstablerwache", None, 35)],
+        [("S6", "Darmstadt Hbf", None, "Frankfurt (Main) Konstablerwache", None, 33)],
     ],
     ("Darmstadt Hbf", "Frankfurt (Main) Taunusanlage"): [
-        [("S3/S4", "Darmstadt Hbf", None, "Frankfurt (Main) Taunusanlage", None, 39)],
+        [("S6", "Darmstadt Hbf", None, "Frankfurt (Main) Taunusanlage", None, 37)],
     ],
 }
 TRANSFER_MINUTES = 6

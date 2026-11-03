@@ -101,6 +101,7 @@ def test_summary_and_map_render():
     options = plan.plan(ORIGIN, ZEIL, "stroller", network(), transit.Static(), lookup_with())
     result = plan.summary(options, "stroller") | {"from": "A", "to": "B"}
     assert result["options"][0]["usable"]
+    assert {"leave_at", "arrive_at", "later_departures"} <= result["options"][0].keys()
     page = mapview.render(result, options, ORIGIN, ZEIL)
     assert (
         "Best we can offer" in page and "leaflet" in page and "10351032" in page
@@ -194,11 +195,21 @@ def test_train_leaving_before_you_arrive_is_rejected():
     too_soon = plan.plan(
         ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
     )
-    assert not too_soon[0].usable and too_soon[0].problems
+    assert too_soon == []
     later = plan.plan(
         ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=30)), lookup_with(), now
     )
     assert later[0].usable
+
+
+def test_missed_train_is_not_offered():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    options = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
+    )
+    assert options == []
 
 
 def test_walk_between_two_stations_is_checked():
@@ -338,3 +349,144 @@ def test_panel_says_when_no_trip_is_fully_confirmed():
     assert not any(o["fully_verified"] for o in result["options"] if o["usable"])
     page = mapview.render(result, options, ORIGIN, ZEIL)
     assert "Best we can offer" in page and "No trip right now is fully confirmed" in page
+
+
+def _timed_option(departs, destination="Frankfurt (Main) Hauptwache", status="ok"):
+    from datetime import timedelta
+
+    arrival = departs + timedelta(minutes=35) if departs else None
+    leg = transit.Leg("suburban", "S6", "Darmstadt Hbf", destination, departs, arrival, "2", None, 35)
+    walk = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+    checks = [plan.StationCheck("Darmstadt Hbf", "2", "ok"), plan.StationCheck(destination, None, status)]
+    return plan.Option(
+        transit.Journey([leg], "test"),
+        checks,
+        walk_start=walk,
+        walk_end=walk,
+        board_via="entrance Am Fürstenbahnhof",
+        alight_via="VGF street lift (exit 2)",
+    )
+
+
+def test_collapse_keeps_earliest_and_lists_later():
+    from datetime import datetime
+
+    t = lambda h, m: datetime(2026, 11, 3, h, m)  # noqa: E731
+    other = _timed_option(t(12, 40), "Frankfurt (Main) Konstablerwache")
+    ranked = [_timed_option(t(13, 35)), other, _timed_option(t(12, 35)), _timed_option(t(13, 5))]
+    (kept, still_other) = plan.collapse(ranked)
+    assert kept.journey.rides[0].departure == t(12, 35)
+    assert kept.later == [t(13, 5), t(13, 35)]
+    assert still_other is other and other.later == []
+
+
+def test_collapse_keeps_verified_and_unverified_apart():
+    from datetime import datetime
+
+    departs = datetime(2026, 11, 3, 12, 35)
+    options = plan.collapse([_timed_option(departs), _timed_option(departs, status="unverified")])
+    assert len(options) == 2
+    assert all(o.later == [] for o in options)
+
+
+def test_leave_and_arrive_times():
+    from datetime import datetime, timedelta
+
+    departs = datetime(2026, 11, 3, 12, 35)
+    arrives = departs + timedelta(minutes=35)
+    start = plan.routing.WalkRoute("wheelchair", 600, 600, [], [], [])  # 10 min at 60 m/min
+    end = plan.routing.WalkRoute("wheelchair", 300, 300, [], [], [])  # 5 min
+
+    def option(dep, arr):
+        leg = transit.Leg(
+            "suburban", "S6", "Darmstadt Hbf", "Frankfurt (Main) Hauptwache", dep, arr, None, None, 35
+        )
+        return plan.Option(transit.Journey([leg], "test"), [], walk_start=start, walk_end=end)
+
+    both = option(departs, arrives)
+    assert both.leave_at == departs - timedelta(minutes=10 + plan.BOARDING_BUFFER_MIN)
+    assert both.arrive_at == arrives + timedelta(minutes=5)
+    no_dep = option(None, arrives)
+    assert no_dep.leave_at is None
+    assert no_dep.arrive_at == arrives + timedelta(minutes=5)
+    no_arr = option(departs, None)
+    assert no_arr.arrive_at is None
+    assert no_arr.leave_at == departs - timedelta(minutes=10 + plan.BOARDING_BUFFER_MIN)
+
+
+def test_option_html_shows_leave_time_and_later():
+    option = {
+        "usable": True,
+        "fully_verified": True,
+        "minutes": 97,
+        "timetable": "test",
+        "rides": [
+            {
+                "line": "S6",
+                "from": "Darmstadt Hbf",
+                "to": "Frankfurt (Main) Hauptwache",
+                "minutes": 35,
+                "departure": "2026-11-03T12:35:00+01:00",
+            }
+        ],
+        "stations": [],
+        "walk_to_station": None,
+        "walk_from_station": None,
+        "transfer_walks": [],
+        "problems": [],
+        "avoided_on_shortest_path": [],
+        "leave_at": "12:02",
+        "arrive_at": "13:39",
+        "later_departures": ["13:05"],
+    }
+    page = mapview._option_html(option, True)
+    assert "Leave at 12:02" in page
+    assert "arrive about 13:39" in page
+    assert "Same trip later: 13:05" in page
+
+
+def test_earliest_uses_entrance_doors_not_pin():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    net = network()
+    graph = plan.routing.build_graph(net, "wheelchair")
+    darmstadt = transit.find_stop("Darmstadt Hbf")
+    pin = plan.best_walk(net, graph, ORIGIN, [((darmstadt.lon, darmstadt.lat), False, "")], True)[0]
+    doors = [
+        plan.best_walk(net, graph, ORIGIN, [((e.lon, e.lat), True, e.name)], True)[0]
+        for e in darmstadt.entrances
+    ]
+    gap = min(plan.walk_minutes(d) for d in doors) - plan.walk_minutes(pin)
+    assert gap > 0  # the pin is closer than any door in this fixture
+    early = now + timedelta(minutes=plan.walk_minutes(pin) + plan.BOARDING_BUFFER_MIN + gap / 2)
+    late = now + timedelta(minutes=plan.walk_minutes(pin) + plan.BOARDING_BUFFER_MIN + gap + 5)
+
+    class Since:
+        """A provider offering fixed departures at or after the requested time, like the live ones."""
+
+        def journeys(self, origin, destination, results=3, departure=None):
+            if (origin.name, destination.name) != ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"):
+                return []
+            found = []
+            for departs in (early, late):
+                if departure is not None and departs < departure:
+                    continue
+                leg = transit.Leg(
+                    "suburban",
+                    "S3",
+                    origin.name,
+                    destination.name,
+                    departs,
+                    departs + timedelta(minutes=37),
+                    None,
+                    None,
+                    37,
+                )
+                found.append(transit.Journey([leg], "test"))
+            return found[:results]
+
+    options = plan.plan(ORIGIN, ZEIL, "wheelchair", net, Since(), lookup_with(), now)
+    assert len(options) == 1
+    assert options[0].journey.rides[0].departure == late
+    assert not any("train leaves before" in p for p in options[0].problems)
