@@ -41,6 +41,8 @@ DEMO_TRIPS = [
         title="Luisenplatz, Darmstadt → Zeil, Frankfurt (wheelchair)",
         origin="luisenplatz",
         destination="zeil",
+        note="Near the end, the shortest walk takes a 34-step stairway down to the U-Bahn; "
+        "the planner walks around it.",
     ),
     DemoTrip(
         slug="luisenplatz-zeil-broken-lift",
