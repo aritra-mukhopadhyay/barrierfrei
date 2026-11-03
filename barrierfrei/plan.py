@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import requests
+
 from barrierfrei import routing, stations, store, transit
 from barrierfrei.config import get_settings, require
 from barrierfrei.http import make_session
@@ -438,7 +440,7 @@ def main() -> None:
     )
     parser.add_argument("--to", dest="destination", default="zeil")
     parser.add_argument("--profile", choices=routing.PROFILES, default="wheelchair")
-    parser.add_argument("--transit", choices=["auto", "live", "static"], default="auto")
+    parser.add_argument("--transit", choices=["auto", "live", "rest", "static"], default="auto")
     parser.add_argument(
         "--out-of-service",
         type=int,
@@ -452,12 +454,23 @@ def main() -> None:
 
     settings = get_settings()
     session = make_session()
-    if args.transit == "static":
-        provider = transit.Static()
-    else:
-        provider = transit.DbRest(session) if args.transit == "live" else transit.Auto()
     client_id = require(settings.db_client_id, "DB_CLIENT_ID")
     api_key = require(settings.db_api_key, "DB_API_KEY")
+    # Live timetables fail fast with no retries, so the fallback stays instant; FaSta keeps the session.
+    fast = requests.Session()
+    if args.transit == "static":
+        provider = transit.Static()
+    elif args.transit == "live":
+        provider = transit.DbTimetables(fast, client_id, api_key)
+    elif args.transit == "rest":
+        provider = transit.DbRest(fast, timeout=8)
+    else:
+        provider = transit.Auto(
+            live=[
+                transit.DbTimetables(fast, client_id, api_key),
+                transit.DbRest(fast, timeout=8),
+            ]
+        )
     outages = set(args.out_of_service)
 
     def lookup(number: int) -> stations.Station:
