@@ -666,3 +666,256 @@ def test_option_html_marks_long_distance():
 
     assert "Needs a long-distance ticket" in mapview._option_html(option(long_distance=True), True)
     assert "Needs a long-distance ticket" not in mapview._option_html(option(), True)
+
+
+def _berlin(h, m):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime(2026, 11, 3, h, m, tzinfo=ZoneInfo("Europe/Berlin"))
+
+
+def _ranked_option(
+    line,
+    dest,
+    dep,
+    arr,
+    ride_min,
+    start_m,
+    end_m,
+    statuses,
+    end_cost=None,
+    board_via="",
+    alight_via="",
+):
+    mode = "suburban" if line.startswith("S") else "regional"
+    leg = transit.Leg(mode, line, "Darmstadt Hbf", dest, dep, arr, None, None, ride_min)
+    walk_start = plan.routing.WalkRoute("wheelchair", start_m, start_m, [], [], [])
+    walk_end = plan.routing.WalkRoute(
+        "wheelchair", end_m, end_cost if end_cost is not None else end_m, [], [], []
+    )
+    checks = [
+        plan.StationCheck("Darmstadt Hbf", None, statuses[0]),
+        plan.StationCheck(dest, None, statuses[1]),
+    ]
+    return plan.Option(
+        transit.Journey([leg], "test"),
+        checks,
+        walk_start=walk_start,
+        walk_end=walk_end,
+        board_via=board_via,
+        alight_via=alight_via,
+    )
+
+
+def test_rank_prefers_earlier_arrival_among_verified():
+    s6 = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(17, 35),
+        _berlin(18, 12),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+    )
+    re60 = _ranked_option(
+        "RE60",
+        "Frankfurt (Main) Hbf",
+        _berlin(18, 7),
+        _berlin(18, 25),
+        18,
+        2222,
+        1560,
+        ["ok", "ok"],
+    )
+    assert s6.arrive_at == _berlin(18, 22)
+    assert re60.arrive_at == _berlin(18, 51)
+    assert re60.score < s6.score
+    assert plan.rank([re60, s6]) == [s6, re60]
+
+
+def test_rank_prefers_earlier_arrival_regional_pair():
+    re60 = _ranked_option(
+        "RE60",
+        "Frankfurt (Main) Hbf",
+        _berlin(18, 7),
+        _berlin(18, 25),
+        18,
+        2767,
+        1081,
+        ["ok", "ok"],
+    )
+    rb68 = _ranked_option(
+        "RB68",
+        "Frankfurt (Main) Hbf",
+        _berlin(18, 30),
+        _berlin(18, 47),
+        17,
+        2767,
+        1081,
+        ["ok", "ok"],
+    )
+    assert rb68.score < re60.score
+    assert re60.arrive_at < rb68.arrive_at
+    assert plan.rank([rb68, re60]) == [re60, rb68]
+
+
+def test_rank_keeps_verified_before_earlier_unverified():
+    verified = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(17, 35),
+        _berlin(18, 12),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+    )
+    unverified = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Hauptwache",
+        _berlin(17, 34),
+        _berlin(18, 11),
+        37,
+        2199,
+        600,
+        ["ok", "unverified"],
+    )
+    assert unverified.arrive_at < verified.arrive_at
+    assert plan.rank([unverified, verified]) == [verified, unverified]
+
+
+def test_rank_penalties_shift_arrival():
+    def unverified_option(dep, arr, statuses):
+        leg = transit.Leg(
+            "suburban", "S6", "Darmstadt Hbf", "Frankfurt (Main) Hauptwache", dep, arr, None, None, 37
+        )
+        checks = [
+            plan.StationCheck("Darmstadt Hbf", None, statuses[0]),
+            plan.StationCheck("Frankfurt (Main) Hauptwache", None, statuses[1]),
+        ]
+        start = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        end = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        return plan.Option(transit.Journey([leg], "test"), checks, walk_start=start, walk_end=end)
+
+    one = unverified_option(_berlin(17, 48), _berlin(18, 25), ["ok", "unverified"])
+    two = unverified_option(_berlin(17, 43), _berlin(18, 20), ["unverified", "unverified"])
+    assert one.arrive_at == _berlin(18, 25)
+    assert two.arrive_at == _berlin(18, 20)
+    assert plan.rank([two, one]) == [one, two]
+
+    rough = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(17, 35),
+        _berlin(18, 12),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+        end_cost=600 + 900,
+    )
+    smooth = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(17, 43),
+        _berlin(18, 20),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+    )
+    assert rough.arrive_at == _berlin(18, 22)
+    assert smooth.arrive_at == _berlin(18, 30)
+    assert plan.rank([rough, smooth]) == [smooth, rough]
+
+
+def test_rank_without_times_uses_score():
+    def untimed(ride_min):
+        leg = transit.Leg("suburban", "S3", "a", "b", None, None, None, None, ride_min)
+        start = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        end = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        checks = [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, "ok")]
+        return plan.Option(transit.Journey([leg], "test"), checks, walk_start=start, walk_end=end)
+
+    fast, slow = untimed(20), untimed(40)
+    assert plan.rank([slow, fast]) == [fast, slow]
+
+    leg = transit.Leg("suburban", "S6", "a", "b", _berlin(17, 35), _berlin(18, 15), None, None, 40)
+    start = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+    end = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+    checks = [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, "ok")]
+    timed = plan.Option(transit.Journey([leg], "test"), checks, walk_start=start, walk_end=end)
+    assert fast.score < timed.score
+    assert plan.rank([fast, timed]) == [timed, fast]
+
+
+def test_rank_unusable_last():
+    def option(dep, arr, status):
+        leg = transit.Leg("suburban", "S6", "a", "b", dep, arr, None, None, 37)
+        start = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        end = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+        checks = [plan.StationCheck("a", None, "ok"), plan.StationCheck("b", None, status)]
+        return plan.Option(transit.Journey([leg], "test"), checks, walk_start=start, walk_end=end)
+
+    usable = option(_berlin(18, 23), _berlin(19, 0), "ok")
+    broken = option(_berlin(17, 23), _berlin(18, 0), "broken")
+    assert plan.rank([broken, usable]) == [usable, broken]
+
+
+def test_collapse_order_matches_rank():
+    early = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(17, 35),
+        _berlin(18, 12),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+        board_via="door",
+        alight_via="door",
+    )
+    late = _ranked_option(
+        "S6",
+        "Frankfurt (Main) Taunusanlage",
+        _berlin(18, 5),
+        _berlin(18, 42),
+        37,
+        2199,
+        600,
+        ["ok", "ok"],
+        board_via="door",
+        alight_via="door",
+    )
+    re60 = _ranked_option(
+        "RE60",
+        "Frankfurt (Main) Hbf",
+        _berlin(18, 7),
+        _berlin(18, 25),
+        18,
+        2222,
+        1560,
+        ["ok", "ok"],
+    )
+    result = plan.collapse(plan.rank([re60, late, early]))
+    assert len(result) == 2
+    assert result[0].journey.rides[0].departure == _berlin(17, 35)
+    assert result[0].later == [_berlin(18, 5)]
+    assert plan.rank(result) == result
+
+
+def test_why_best_compares_arrivals():
+    first = {"usable": True, "fully_verified": True, "minutes": 89, "arrive_at": "18:22"}
+    slower = {"usable": True, "fully_verified": True, "minutes": 86, "arrive_at": "18:51"}
+    assert mapview._why_best(first, [first, slower]) == ""
+
+    late = {"usable": True, "fully_verified": True, "minutes": 89, "arrive_at": "18:30"}
+    early = {"usable": True, "fully_verified": False, "minutes": 86, "arrive_at": "18:21"}
+    note = mapview._why_best(late, [late, early])
+    assert "arrives 9 min later than the earliest option" in note
+
+    no_time = {"usable": True, "fully_verified": True, "minutes": 70, "arrive_at": None}
+    faster = {"usable": True, "fully_verified": False, "minutes": 60, "arrive_at": None}
+    assert "min slower than the fastest option" in mapview._why_best(no_time, [no_time, faster])
