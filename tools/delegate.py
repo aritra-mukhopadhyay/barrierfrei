@@ -129,6 +129,24 @@ def find_session_id(log: Path) -> str | None:
     return None
 
 
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Terminate a process and all its descendants, then wait for it to exit."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        import signal
+
+        os.killpg(proc.pid, signal.SIGKILL)  # start_new_session made it the group leader
+    proc.wait()
+
+
+def find_muse() -> str:
+    muse = shutil.which("muse")
+    if not muse:
+        sys.exit("`muse` is not on PATH. Install Muse Code first (see the setup guide).")
+    return muse
+
+
 def sandbox_ready(muse: str) -> None:
     """On Windows, stop early with the fix when Muse Code's sandbox was never set up."""
     if sys.platform != "win32":
@@ -146,9 +164,7 @@ def sandbox_ready(muse: str) -> None:
 def run_muse(
     slug: str, prompt: str, model: str, max_steps: int, session: str | None, timeout_min: int
 ) -> int:
-    muse = shutil.which("muse")
-    if not muse:
-        sys.exit("`muse` is not on PATH. Install Muse Code first (see the setup guide).")
+    muse = find_muse()
     sandbox_ready(muse)
     prompt_file = TASKS_DIR / f"{slug}.prompt.md"
     prompt_file.write_text(prompt, encoding="utf-8")
@@ -164,11 +180,16 @@ def run_muse(
     errlog = TASKS_DIR / f"{slug}.stderr.log"  # kept apart so the .jsonl stays pure JSON events
     print(f"Muse Code is working on '{slug}' ({model}, at most {max_steps} steps / {timeout_min} min)...")
     with log.open("a", encoding="utf-8") as out, errlog.open("a", encoding="utf-8") as err:
+        # Own process group, so on timeout we can stop Muse Code *and* every tool it spawned
+        # before reading the diff; killing only the parent could leave children editing files.
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {}
+        proc = subprocess.Popen(
+            cmd, cwd=worktree(slug), env=env, stdout=out, stderr=err, start_new_session=True, **group
+        )
         try:
-            code = subprocess.run(
-                cmd, cwd=worktree(slug), env=env, stdout=out, stderr=err, timeout=timeout_min * 60
-            ).returncode
+            code = proc.wait(timeout=timeout_min * 60)
         except subprocess.TimeoutExpired:
+            kill_tree(proc)
             print(f"Stopped Muse Code after {timeout_min} min; see {errlog.name} and the end of {log.name}.")
             return 124
     print(f"muse exec exited with {code} (0 = the run finished, not that the work is right).")
@@ -218,6 +239,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_slug(slug)
     if worktree(slug).exists():
         sys.exit(f"{worktree(slug)} already exists. Use `resume {slug} ...` or `clean {slug}` first.")
+    sandbox_ready(find_muse())  # before creating anything, so a failed preflight leaves no half task
     TASKS_DIR.mkdir(exist_ok=True)
     base = args.base or "HEAD"
     git("worktree", "add", "-b", f"muse/{slug}", str(worktree(slug)), base)
