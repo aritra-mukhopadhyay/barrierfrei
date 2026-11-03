@@ -68,7 +68,7 @@ settings and use `--transit` choices `auto` (default: `Auto([DbTimetables(...), 
 `live` (DbTimetables only), `rest` (DbRest only) and `static`. The credentials are already read
 via `require(...)`; move those two lines above the provider choice. Never log the key.
 
-Update the module docstring of `transit.py` and the README's data sources table with one line each.
+Update the module docstring of `transit.py` to list the new provider.
 
 ## Tests
 Add to `tests/test_transit.py`, with a fake session (no network, no keys), small XML fixtures
