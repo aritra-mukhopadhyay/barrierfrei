@@ -35,8 +35,11 @@ PAGE = """<!doctype html>
 const data = {data};
 function draw(id, part) {{
   const map = L.map(id);
-  L.tileLayer("https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png",
-    {{maxZoom: 19, attribution: "&copy; OpenStreetMap contributors"}}).addTo(map);
+  // OSM's own tile servers require a Referer header and answer "Access blocked" to a page opened
+  // from a file (file:// sends none). CARTO's free basemap serves the same OSM data without one.
+  L.tileLayer("https://{{s}}.basemaps.cartocdn.com/rastertiles/voyager/{{z}}/{{x}}/{{y}}{{r}}.png",
+    {{maxZoom: 20, subdomains: "abcd",
+      attribution: "&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors &copy; <a href='https://carto.com/attributions'>CARTO</a>"}}).addTo(map);
   const ll = c => [c[1], c[0]];
   const bounds = [];
   (part.direct || []).forEach(line => L.polyline(line.map(ll), {{color: "#888", dashArray: "6 6", weight: 3}}).addTo(map));
