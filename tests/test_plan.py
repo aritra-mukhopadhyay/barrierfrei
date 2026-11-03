@@ -921,6 +921,68 @@ def test_why_best_compares_arrivals():
     assert "min slower than the fastest option" in mapview._why_best(no_time, [no_time, faster])
 
 
+def test_summary_has_ride_arrivals():
+    from datetime import datetime
+
+    departs = datetime(2026, 11, 3, 12, 35)
+    option = _timed_option(departs)
+    result = plan.summary([option], "wheelchair")
+    assert result["options"][0]["rides"][0]["arrival"] == option.journey.rides[0].arrival.isoformat()
+
+    leg = transit.Leg(
+        "suburban", "S6", "Darmstadt Hbf", "Frankfurt (Main) Hauptwache", departs, None, None, None, 35
+    )
+    walk = plan.routing.WalkRoute("wheelchair", 0, 0, [], [], [])
+    checks = [
+        plan.StationCheck("Darmstadt Hbf", "2", "ok"),
+        plan.StationCheck("Frankfurt (Main) Hauptwache", None, "ok"),
+    ]
+    timeless = plan.Option(transit.Journey([leg], "test"), checks, walk_start=walk, walk_end=walk)
+    result = plan.summary([timeless], "wheelchair")
+    assert result["options"][0]["rides"][0]["arrival"] is None
+
+
+def test_avoided_excludes_what_the_trip_still_crosses():
+    from datetime import datetime
+
+    option = _timed_option(datetime(2026, 11, 3, 12, 35))
+    option.avoided = ["stairs", "uneven surface"]
+    option.walk_start.notes.append("uneven surface")
+    result = plan.summary([option], "wheelchair")
+    assert result["options"][0]["avoided_on_shortest_path"] == ["stairs"]
+    assert option.avoided == ["stairs", "uneven surface"]
+
+    option.walk_start = None
+    option.walk_end = None
+    result = plan.summary([option], "wheelchair")
+    assert result["options"][0]["avoided_on_shortest_path"] == ["stairs", "uneven surface"]
+
+
+def test_explain_prompt_rules():
+    for word in ("arrive_at", "arrival", "avoided_on_shortest_path", "not skipped"):
+        assert word in plan.EXPLAIN_PROMPT
+    text = plan.EXPLAIN_PROMPT.format(profile="wheelchair", plan="{}")
+    assert "wheelchair" in text and "{}" in text
+
+
+def test_why_best_handles_midnight_arrival():
+    late = {
+        "usable": True,
+        "fully_verified": True,
+        "minutes": 89,
+        "leave_at": "23:20",
+        "arrive_at": "00:13",
+    }
+    early = {
+        "usable": True,
+        "fully_verified": False,
+        "minutes": 60,
+        "leave_at": "22:50",
+        "arrive_at": "23:50",
+    }
+    assert "arrives 23 min later" in mapview._why_best(late, [late, early])
+
+
 def test_run_trip_returns_result_and_map():
     origin, dest = f"{ORIGIN[1]},{ORIGIN[0]}", f"{ZEIL[1]},{ZEIL[0]}"
     result, page, options = plan.run_trip(

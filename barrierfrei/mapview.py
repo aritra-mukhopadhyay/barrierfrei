@@ -91,14 +91,21 @@ def _why_best(option: dict, others: list[dict]) -> str:
     """Say why we recommend a trip that isn't the fastest; people will wonder."""
     arrive = option.get("arrive_at")
     if arrive:
-        # Known limitation: a trip arriving after midnight compares wrongly against one arriving before.
+        # Times are "HH:MM" with no date; an arrival earlier than its own leave_at is next day.
         def to_minutes(value: str) -> int:
             hours, minutes = value.split(":")
             return int(hours) * 60 + int(minutes)
 
-        arrivals = [to_minutes(o["arrive_at"]) for o in others if o["usable"] and o.get("arrive_at")]
+        def effective(o: dict) -> int:
+            minutes = to_minutes(o["arrive_at"])
+            leave = o.get("leave_at")
+            if leave and minutes < to_minutes(leave):
+                minutes += 24 * 60
+            return minutes
+
+        arrivals = [effective(o) for o in others if o["usable"] and o.get("arrive_at")]
         if arrivals:
-            later_by = to_minutes(arrive) - min(arrivals)
+            later_by = effective(option) - min(arrivals)
             if later_by > 0 and option["fully_verified"]:
                 return (
                     f"<br><small class='ok'>arrives {later_by} min later than the earliest option, "

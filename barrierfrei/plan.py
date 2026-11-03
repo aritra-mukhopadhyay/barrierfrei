@@ -491,6 +491,15 @@ def summary(options: list[Option], profile: str, tickets: str = "regional") -> d
             return None
         return {"metres": round(w.length_m), "minutes": round(walk_minutes(w)), "notes": w.notes}
 
+    def truly_avoided(o: Option):
+        """Entries of `avoided` the trip no longer crosses on either walk."""
+        still = set()
+        if o.walk_start and o.walk_start.notes:
+            still.update(o.walk_start.notes)
+        if o.walk_end and o.walk_end.notes:
+            still.update(o.walk_end.notes)
+        return [x for x in o.avoided if x not in still]
+
     return {
         "profile": profile,
         "tickets": tickets,
@@ -510,6 +519,7 @@ def summary(options: list[Option], profile: str, tickets: str = "regional") -> d
                         "from": leg.origin,
                         "to": leg.destination,
                         "departure": leg.departure.isoformat() if leg.departure else None,
+                        "arrival": leg.arrival.isoformat() if leg.arrival else None,
                         "minutes": round(leg.minutes),
                     }
                     for leg in o.journey.rides
@@ -532,7 +542,7 @@ def summary(options: list[Option], profile: str, tickets: str = "regional") -> d
                     for t in o.transfer_walks
                 ],
                 "problems": o.blockers,
-                "avoided_on_shortest_path": o.avoided,
+                "avoided_on_shortest_path": truly_avoided(o),
             }
             for o in options
         ],
@@ -540,10 +550,12 @@ def summary(options: list[Option], profile: str, tickets: str = "regional") -> d
 
 
 EXPLAIN_PROMPT = """You help people with wheelchairs, strollers or heavy suitcases travel step-free.
-Below is a trip plan computed and verified by our routing code (profile: {profile}). Explain the
-recommended option (the first usable one) to the traveller in 4-6 short sentences: the walk, which
-elevators to use, the train, and what was avoided. If other options were rejected, say why in one
-sentence. Do not invent anything that is not in the plan.
+Below is a trip plan computed and verified by our routing code (profile: {profile}).
+Explain the recommended option (the first usable one) in 4-6 short sentences: the walk to the station, which lifts to use, the train with its departure and the time it reaches the station, the walk at the end, and the arrival at the destination.
+`leave_at` is when to leave the start and `arrive_at` is the arrival at the destination after the last walk; a ride's own `arrival` is when the train reaches that station. Never mix them up.
+Only say a trip avoids something if it is listed in `avoided_on_shortest_path`; surfaces in a walk's `notes` are still on the route.
+Other options are still offered, not skipped or rejected, unless their `usable` is false. If an alternative arrives earlier but is not `fully_verified`, say in one sentence that it is faster but some of its lifts can't be checked live. If an option is not usable, say why from its `problems`.
+Do not invent anything that is not in the plan. Use the 24-hour times exactly as given.
 
 {plan}"""
 
