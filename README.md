@@ -47,6 +47,16 @@ The demo region is central Darmstadt to central Frankfurt.
 Settings (keys, demo bbox, model names) live in `barrierfrei/config.py` and can be overridden in `.env`,
 e.g. `BBOX=[8.628,49.869,8.653,49.876]`.
 
+## Demo site
+
+A static copy of live trip plans for the judges, published on GitHub Pages. On a machine with the
+keys and the ingested data, compute the trips, commit `site/`, and Pages publishes it:
+
+```bash
+python -m barrierfrei.site                 # all demo trips into site/
+python -m barrierfrei.site --only luisenplatz-zeil   # rebuild one trip
+```
+
 ## Development
 
 ```bash
