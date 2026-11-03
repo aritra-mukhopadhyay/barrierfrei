@@ -79,7 +79,17 @@ def read_key() -> str:
 
 
 def git(*args: str, cwd: Path = REPO) -> str:
-    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout
+    # Explicit UTF-8: Windows would otherwise decode git's output as cp1252 ("SÃ¼d" for "Süd").
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    return proc.stdout
 
 
 def validate_slug(slug: str) -> None:
@@ -220,6 +230,24 @@ def run_muse(
     return code
 
 
+def format_changed(slug: str) -> None:
+    """Run `ruff format` on the Python files the agent touched (it can't run ruff in its sandbox).
+
+    Safe before review: ruff only parses and rewrites the files, it never executes them. Python
+    runs in isolated mode (-I) so an agent-written ruff.py in the clone can't shadow the real
+    ruff, and without secrets in its environment.
+    """
+    wt = worktree(slug)
+    git("add", "-A", "--intent-to-add", cwd=wt)
+    # -z: raw NUL-separated paths; otherwise git quotes non-ASCII names ("s\303\274d.py").
+    names = git("diff", "HEAD", "--name-only", "-z", "--diff-filter=d", cwd=wt).split("\0")
+    changed = [f for f in names if f.endswith(".py")]
+    if changed:
+        env = {k: v for k, v in os.environ.items() if k not in SECRETS}
+        cmd = [sys.executable, "-I", "-m", "ruff", "format", "--quiet", "--", *changed]
+        subprocess.run(cmd, cwd=wt, env=env)
+
+
 def save_diff(slug: str) -> None:
     """Write the task clone's full diff for review. Only git runs here, no agent-written code."""
     wt = worktree(slug)
@@ -280,6 +308,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "session": find_session_id(TASKS_DIR / f"{slug}.jsonl"),
     }
     meta_path(slug).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    format_changed(slug)
     save_diff(slug)
     print(f"\nReview the diff, then run checks: python tools/delegate.py check {slug}")
     return code
@@ -295,6 +324,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     code = run_muse(
         args.slug, args.message, args.model or meta["model"], args.max_steps, session, args.timeout
     )
+    format_changed(args.slug)
     save_diff(args.slug)
     print(f"\nReview the diff, then run checks: python tools/delegate.py check {args.slug}")
     return code
