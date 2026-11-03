@@ -587,3 +587,82 @@ def test_missing_lift_data_is_unverified_not_broken():
     assert "no elevator listed for track 7" in check.reason
     broken = plan.check_station("Darmstadt Hbf", "5", lambda n: lookup(n, {10543460}))
     assert broken.status == "broken"
+
+
+def test_regional_tickets_skip_long_distance_trains():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+
+    class Both:
+        def journeys(self, origin, destination, results=3, departure=None):
+            if (origin.name, destination.name) != ("Darmstadt Hbf", "Frankfurt (Main) Hauptwache"):
+                return []
+            departs = now + timedelta(minutes=30)
+            ice = transit.Leg(
+                "national",
+                "ICE 1092",
+                origin.name,
+                destination.name,
+                departs,
+                departs + timedelta(minutes=20),
+                None,
+                None,
+                20,
+            )
+            sbahn = transit.Leg(
+                "suburban",
+                "S6",
+                origin.name,
+                destination.name,
+                departs,
+                departs + timedelta(minutes=37),
+                None,
+                None,
+                37,
+            )
+            return [transit.Journey([ice], "test"), transit.Journey([sbahn], "test")]
+
+    regional = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Both(), lookup_with(), now)
+    assert len(regional) == 1
+    assert regional[0].journey.rides[0].line == "S6"
+    both = plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Both(), lookup_with(), now, tickets="any")
+    assert len(both) == 2
+    result = plan.summary(both, "wheelchair", tickets="any")
+    assert result["tickets"] == "any"
+    ice_summary = next(o for o in result["options"] if o["rides"][0]["line"] == "ICE 1092")
+    assert ice_summary["long_distance"] is True
+    with pytest.raises(ValueError):
+        plan.plan(ORIGIN, ZEIL, "wheelchair", network(), Both(), lookup_with(), now, tickets="foo")
+
+
+def test_option_html_marks_long_distance():
+    def option(**overrides):
+        base = {
+            "usable": True,
+            "fully_verified": True,
+            "minutes": 97,
+            "timetable": "test",
+            "rides": [
+                {
+                    "line": "ICE 1092",
+                    "from": "Darmstadt Hbf",
+                    "to": "Frankfurt (Main) Hbf",
+                    "minutes": 20,
+                    "departure": "2026-11-03T12:35:00+01:00",
+                }
+            ],
+            "stations": [],
+            "walk_to_station": None,
+            "walk_from_station": None,
+            "transfer_walks": [],
+            "problems": [],
+            "avoided_on_shortest_path": [],
+            "leave_at": "12:02",
+            "arrive_at": "13:39",
+            "later_departures": [],
+        }
+        return base | overrides
+
+    assert "Needs a long-distance ticket" in mapview._option_html(option(long_distance=True), True)
+    assert "Needs a long-distance ticket" not in mapview._option_html(option(), True)

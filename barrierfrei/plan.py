@@ -324,7 +324,10 @@ def plan(
     provider,
     station_lookup,
     now: datetime | None = None,
+    tickets: str = "regional",
 ) -> list[Option]:
+    if tickets not in ("regional", "any"):
+        raise ValueError(f"unknown tickets {tickets!r}: use 'regional' or 'any'")
     now = now or datetime.now().astimezone()
     graph = routing.build_graph(network, profile)
     plain = routing.build_graph(network, None)
@@ -356,6 +359,8 @@ def plan(
         for end in ends:
             for journey in provider.journeys(start, end, departure=earliest):
                 if not journey.rides:
+                    continue
+                if tickets == "regional" and journey.long_distance:
                     continue
                 checks, transfer_walks = check_journey(journey, station_lookup, network, graph)
                 option = Option(journey, checks, transfer_walks)
@@ -453,7 +458,7 @@ def lift_text(check: StationCheck, lift: stations.Elevator) -> str:
     return lift.description or f"lift {lift.equipment}"
 
 
-def summary(options: list[Option], profile: str) -> dict:
+def summary(options: list[Option], profile: str, tickets: str = "regional") -> dict:
     """A plain JSON description of the plan: input for the map and for the model's explanation."""
 
     def walk(w: routing.WalkRoute | None):
@@ -463,11 +468,13 @@ def summary(options: list[Option], profile: str) -> dict:
 
     return {
         "profile": profile,
+        "tickets": tickets,
         "options": [
             {
                 "usable": o.usable,
                 "fully_verified": o.verified,
                 "minutes": round(o.minutes),
+                "long_distance": o.journey.long_distance,
                 "leave_at": o.leave_at.strftime("%H:%M") if o.leave_at else None,
                 "arrive_at": o.arrive_at.strftime("%H:%M") if o.arrive_at else None,
                 "later_departures": [d.strftime("%H:%M") for d in o.later],
@@ -546,6 +553,12 @@ def main() -> None:
     parser.add_argument("--profile", choices=routing.PROFILES, default="wheelchair")
     parser.add_argument("--transit", choices=["auto", "live", "rest", "static"], default="auto")
     parser.add_argument(
+        "--tickets",
+        choices=["regional", "any"],
+        default="regional",
+        help="regional: trains covered by the Deutschlandticket (S-Bahn, RE, RB); any: also ICE, IC and EC",
+    )
+    parser.add_argument(
         "--out-of-service",
         type=int,
         nargs="*",
@@ -587,9 +600,11 @@ def main() -> None:
     network = routing.load_network(store.connect(settings.db_path))
     check_on_map(network, origin_name, tuple(origin))
     check_on_map(network, dest_name, tuple(destination))
-    options = plan(tuple(origin), tuple(destination), args.profile, network, provider, lookup)
+    options = plan(
+        tuple(origin), tuple(destination), args.profile, network, provider, lookup, tickets=args.tickets
+    )
 
-    result = summary(options, args.profile)
+    result = summary(options, args.profile, tickets=args.tickets)
     result |= {"from": origin_name, "to": dest_name}
     out = settings.data_dir / "plans"
     out.mkdir(parents=True, exist_ok=True)
@@ -602,6 +617,8 @@ def main() -> None:
 
     if not options:
         log.error("No journeys found between %s and %s", origin_name, dest_name)
+        if args.tickets == "regional":
+            log.info("No regional trains found; try --tickets any to include ICE, IC and EC.")
     for i, option in enumerate(result["options"], 1):
         rides = ", ".join(f"{r['line']} {r['from']} -> {r['to']}" for r in option["rides"])
         flag = ("OK " if option["fully_verified"] else "OK?") if option["usable"] else "NO "

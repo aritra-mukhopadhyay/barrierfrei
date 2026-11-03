@@ -29,6 +29,13 @@ IRIS_NAMES = {
     "Frankfurt (Main) Konstablerwache": "Frankfurt(M)Konstablerwache",
 }
 
+# Long-distance products: DbTimetables uses "national"; db.transport.rest uses "nationalExpress"
+# for ICE and "national" for IC/EC. Neither is covered by the Deutschlandticket.
+LONG_DISTANCE_MODES = frozenset({"national", "nationalExpress"})
+
+# Timetable categories not covered by the Deutschlandticket (FLX is Flixtrain).
+LONG_DISTANCE_CATEGORIES = frozenset({"ICE", "IC", "EC", "ECE", "RJ", "RJX", "NJ", "EN", "FLX"})
+
 
 @dataclass(frozen=True)
 class Entrance:
@@ -156,6 +163,10 @@ class Journey:
     @property
     def rides(self) -> list[Leg]:
         return [leg for leg in self.legs if leg.mode != "walk"]
+
+    @property
+    def long_distance(self) -> bool:
+        return any(ride.mode in LONG_DISTANCE_MODES for ride in self.rides)
 
 
 def _time(value: str | None) -> datetime | None:
@@ -388,7 +399,7 @@ class DbTimetables:
                 continue
             arrival = arrivals[0]
             dest_platform = next(p for a, p in matches if a == arrival)
-            mode = "suburban" if c == "S" else "regional" if c in ("RE", "RB") else "national"
+            mode = "suburban" if c == "S" else "national" if c in LONG_DISTANCE_CATEGORIES else "regional"
             # Real boards give l="S6" (category included); some give only the number.
             label = dp.get("l")
             line = (label if not label.isdigit() else f"{c}{label}") if label else f"{c} {n}"
