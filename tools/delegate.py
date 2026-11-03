@@ -4,9 +4,9 @@ The split of work: Claude plans the change and writes it up as a task file (Mark
 (running Muse Spark on your Meta Model API credits) writes the code, and Claude reviews the diff
 before anything is committed. This script is the hand-off in the middle:
 
-  1. Creates an isolated git worktree on a new branch `muse/<slug>`, next to the repo in
+  1. Clones the repo (locally, fast) onto a new branch `muse/<slug>`, next to the repo in
      ../barrierfrei-tasks/<slug>, so the agent never touches your own checkout, .env or data/.
-  2. Runs `muse exec` headless in that worktree with the task, the repo rules from AGENTS.md
+  2. Runs `muse exec` headless in that clone with the task, the repo rules from AGENTS.md
      and a step cap. Muse Code's own guardrails stay on (OS sandbox + approval policy), so a
      risky command is refused rather than run. Every event is logged to <slug>.jsonl.
   3. Writes the full diff to <slug>.diff for review. The repo's checks (ruff, pytest) run
@@ -17,7 +17,7 @@ Usage (from the repo root, inside the venv):
   python tools/delegate.py run tasks/add-foo.md            # new task, slug from the file name
   python tools/delegate.py resume add-foo "Fix the failing test in test_plan.py"
   python tools/delegate.py check add-foo                   # after review: ruff + pytest
-  python tools/delegate.py clean add-foo                   # remove worktree and branch
+  python tools/delegate.py clean add-foo                   # remove the task's clone and logs
 
 Your key: MODEL_API_KEY from .env (or META_API_KEY from the environment) is passed to Muse Code
 as META_API_KEY. This script never prints it or writes it to a file.
@@ -56,10 +56,10 @@ Rules:
 - Do not commit, push, create branches, or edit files outside this directory.
 - Do not read, print, or create .env files or any secret. Tests must run without keys or network.
 - Keep the change as small as the task allows. Match the existing style; no drive-by refactors.
-- When done, run `python -m ruff check .`, `python -m ruff format .` and `python -m pytest -q`
-  from this directory and fix what fails.
-- Finish with a short summary: what you changed and why, what you ran and its result, and
-  anything you were unsure about or did not do.
+- Do not run ruff, pytest or other verification commands: the reviewer runs the checks
+  after reading your diff. Read the code carefully instead, and keep the formatting style.
+- Finish with a short summary: what you changed and why, and anything you were unsure
+  about or did not do.
 
 Project rules (AGENTS.md):
 {agents_md}
@@ -86,6 +86,27 @@ def validate_slug(slug: str) -> None:
     """Slugs become paths and branch names, so reject anything that could escape TASKS_DIR."""
     if not SLUG.fullmatch(slug):
         sys.exit(f"Bad task name {slug!r}: use lowercase letters, digits and dashes (e.g. add-voice-input).")
+
+
+def create_workspace(slug: str, base_sha: str) -> None:
+    """Clone this repo into the task folder on a new branch `muse/<slug>` at base_sha.
+
+    A full local clone, not a `git worktree`: a worktree's .git points back into this repo, and
+    Muse Code's Windows sandbox then tries to change permissions inside our .git (and fails).
+    The clone has its own .git, shares objects via hardlinks, and pushes straight to GitHub.
+    """
+    wt = worktree(slug)
+    subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(REPO), str(wt)], check=True)
+    git("checkout", "--quiet", "-b", f"muse/{slug}", base_sha, cwd=wt)
+    origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=REPO, capture_output=True, text=True)
+    if origin.returncode == 0:
+        git("remote", "set-url", "origin", origin.stdout.strip(), cwd=wt)
+
+
+def _force_remove(func, path, _exc) -> None:
+    """rmtree helper: git marks object files read-only, which Windows refuses to delete."""
+    os.chmod(path, 0o700)
+    func(path)
 
 
 def worktree(slug: str) -> Path:
@@ -197,7 +218,7 @@ def run_muse(
 
 
 def save_diff(slug: str) -> None:
-    """Write the worktree's full diff for review. Only git runs here, no agent-written code."""
+    """Write the task clone's full diff for review. Only git runs here, no agent-written code."""
     wt = worktree(slug)
     git("add", "-A", "--intent-to-add", cwd=wt)  # so new files show up in the diff
     (TASKS_DIR / f"{slug}.diff").write_text(git("diff", "HEAD", cwd=wt), encoding="utf-8")
@@ -208,13 +229,13 @@ def save_diff(slug: str) -> None:
 
 
 def check(slug: str) -> bool:
-    """Run the repo's checks in the worktree. Returns True when all pass.
+    """Run the repo's checks in the task clone. Returns True when all pass.
 
     This executes agent-written code (tests) on your machine outside Muse Code's sandbox, so
     `run` and `resume` never call it: read the diff first, then run `check` yourself.
     """
     wt = worktree(slug)
-    # Put the worktree first on the import path; otherwise an editable install of the main
+    # Put the task clone first on the import path; otherwise an editable install of the main
     # checkout would be imported and the tests would silently check the wrong code.
     env = {**os.environ, "PYTHONPATH": str(wt)}
     for secret in SECRETS:
@@ -242,7 +263,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     sandbox_ready(find_muse())  # before creating anything, so a failed preflight leaves no half task
     TASKS_DIR.mkdir(exist_ok=True)
     base = args.base or "HEAD"
-    git("worktree", "add", "-b", f"muse/{slug}", str(worktree(slug)), base)
+    create_workspace(slug, git("rev-parse", base).strip())
     agents = REPO / "AGENTS.md"
     prompt = PREAMBLE.format(
         agents_md=agents.read_text(encoding="utf-8") if agents.exists() else "(none)",
@@ -282,8 +303,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_clean(args: argparse.Namespace) -> int:
     if worktree(args.slug).exists():
-        git("worktree", "remove", "--force", str(worktree(args.slug)))
-    subprocess.run(["git", "branch", "-D", f"muse/{args.slug}"], cwd=REPO, capture_output=True)
+        shutil.rmtree(worktree(args.slug), onerror=_force_remove)
     for suffix in (".json", ".jsonl", ".stderr.log", ".diff", ".prompt.md"):
         (TASKS_DIR / f"{args.slug}{suffix}").unlink(missing_ok=True)
     print(f"Removed task '{args.slug}'.")
@@ -296,7 +316,7 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="start a new task in its own worktree")
+    p = sub.add_parser("run", help="start a new task in its own clone")
     p.add_argument("task_file", help="Markdown file describing the task")
     p.add_argument("--slug", help="task name (default: the task file's name)")
     p.add_argument("--base", help="commit or branch to start from (default: HEAD)")
@@ -318,7 +338,7 @@ def main() -> int:
     p.add_argument("slug")
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("clean", help="remove a task's worktree, branch and logs")
+    p = sub.add_parser("clean", help="remove a task's clone and logs")
     p.add_argument("slug")
     p.set_defaults(func=cmd_clean)
 
