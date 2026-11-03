@@ -56,8 +56,8 @@ Rules:
 - Do not commit, push, create branches, or edit files outside this directory.
 - Do not read, print, or create .env files or any secret. Tests must run without keys or network.
 - Keep the change as small as the task allows. Match the existing style; no drive-by refactors.
-- Do not run ruff, pytest or other verification commands: the reviewer runs the checks
-  after reading your diff. Read the code carefully instead, and keep the formatting style.
+- Do not run ruff, pytest, git or other verification commands: the reviewer runs the checks
+  after reading your diff, and the sandbox can't run them anyway. Use your file tools only.
 - Finish with a short summary: what you changed and why, and anything you were unsure
   about or did not do.
 
@@ -96,7 +96,10 @@ def create_workspace(slug: str, base_sha: str) -> None:
     The clone has its own .git, shares objects via hardlinks, and pushes straight to GitHub.
     """
     wt = worktree(slug)
-    subprocess.run(["git", "clone", "--quiet", "--no-checkout", str(REPO), str(wt)], check=True)
+    # core.autocrlf=false keeps the repo's LF endings in the clone: with Windows CRLF checkouts
+    # Muse's exact-match edits break on mixed line endings and it burns calls repairing them.
+    clone = ["git", "clone", "--quiet", "--no-checkout", "-c", "core.autocrlf=false", str(REPO), str(wt)]
+    subprocess.run(clone, check=True)
     git("checkout", "--quiet", "-b", f"muse/{slug}", base_sha, cwd=wt)
     origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=REPO, capture_output=True, text=True)
     if origin.returncode == 0:
