@@ -2,6 +2,7 @@
 
 Run: python -m barrierfrei.plan --from luisenplatz --to zeil --profile wheelchair
      python -m barrierfrei.plan ... --out-of-service 10561326   (simulate a broken elevator)
+     python -m barrierfrei.serve   (re-open the last trip map)
 
 The code decides the route: it checks every station's elevators against live DB data and only
 accepts a trip whose elevators work. The language model (with --explain) only explains the result.
@@ -12,11 +13,10 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import requests
 
-from barrierfrei import routing, stations, store, transit
+from barrierfrei import routing, serve, stations, store, transit
 from barrierfrei.config import get_settings, require
 from barrierfrei.http import make_session
 
@@ -511,6 +511,7 @@ def main() -> None:
         help="elevator equipment numbers to treat as broken",
     )
     parser.add_argument("--explain", action="store_true", help="ask Muse Spark to explain the plan")
+    parser.add_argument("--no-serve", action="store_true", help="only write the files, do not open the map")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -571,9 +572,11 @@ def main() -> None:
             log.info("      problem: %s", problem)
     if result["options"] and result["options"][0]["avoided_on_shortest_path"]:
         log.info("Avoided on the walk: %s", ", ".join(result["options"][0]["avoided_on_shortest_path"]))
-    log.info("Map: %s", Path(out / "plan.html").resolve())
+    log.info("Files: %s", out.resolve())
     if args.explain and options:
         print("\n" + explain(result))
+    if not args.no_serve and result["options"]:
+        serve.serve(out)
 
 
 if __name__ == "__main__":
