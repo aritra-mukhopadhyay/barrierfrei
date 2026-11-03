@@ -43,7 +43,7 @@ could all confirm comes before one we couldn't.
 | SAM 3.1 | `barrierfrei/sam.py`, `barrierfrei/perceive.py` | Finds stairs, kerbs, ramps, e-scooters and construction barriers in Mapillary street photos and returns their boxes. |
 | Muse Spark (vision) | `barrierfrei/judge.py` | Looks at the photo with SAM's boxes drawn on it and returns schema-checked JSON: the barriers, who can pass (wheelchair, stroller, suitcase), and its confidence. |
 | Muse Spark (text) | `barrierfrei/plan.py` (`--explain`) | Explains the chosen trip in plain words. |
-| Muse Code | `tools/delegate.py`, `tasks/` | Wrote most of the code from short task specs, each reviewed before it was merged (see [How it is built](#how-it-is-built)). |
+| Muse Code | `tools/delegate.py`, `tasks/` | Writes new features from short task specs, each reviewed before it is merged: ten so far, from live DB departures to the demo site (see [How it is built](#how-it-is-built)). |
 
 Safety-critical facts are decided by code, never by a model. Whether a lift works comes from DB's
 live data; whether a path has steps comes from OpenStreetMap. A photo verdict can only make a path
