@@ -1,3 +1,5 @@
+import math
+
 from barrierfrei import routing
 from barrierfrei.judge import Judgement
 from barrierfrei.routing import Network, Segment
@@ -171,3 +173,11 @@ def test_bad_smoothness_is_a_penalty_very_bad_blocks_a_wheelchair():
     assert routing.segment_cost(bad, "wheelchair") == (250.0, ["uneven surface"])
     assert routing.segment_cost(very_bad, "wheelchair") == (None, ["very uneven surface"])
     assert routing.segment_cost(very_bad, "stroller")[0] == 150.0
+
+
+def test_distance_to_network():
+    net = network()
+    assert routing.distance_to_network_m(net, A) == 0
+    far = (A[0], A[1] - 0.009)  # ~1 km south of every node
+    assert 950 < routing.distance_to_network_m(net, far) < 1050
+    assert routing.distance_to_network_m(Network({}, {}), A) == math.inf

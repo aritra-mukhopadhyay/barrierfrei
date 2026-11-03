@@ -37,6 +37,10 @@ class Settings(BaseSettings):
 AREAS: dict[str, tuple[float, float, float, float]] = {
     "darmstadt": (8.628, 49.869, 8.653, 49.876),  # Darmstadt Hbf to Luisenplatz
     "frankfurt": (8.660, 50.104, 8.692, 50.118),  # Frankfurt Hbf, Hauptwache, Konstablerwache, Zeil
+    # Central Darmstadt: Hbf, Luisenplatz, the TU, Mathildenhöhe, Staatstheater.
+    "darmstadt-centre": (8.620, 49.860, 8.672, 49.885),
+    # Central Frankfurt: Hbf, Bahnhofsviertel, Römer, Zeil, Alte Oper, Museumsufer.
+    "frankfurt-centre": (8.650, 50.098, 8.700, 50.122),
 }
 
 

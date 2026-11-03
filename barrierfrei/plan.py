@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 import requests
 
 from barrierfrei import routing, serve, stations, store, transit
-from barrierfrei.config import get_settings, require
+from barrierfrei.config import AREAS, get_settings, require
 from barrierfrei.http import make_session
 
 log = logging.getLogger("barrierfrei.plan")
@@ -27,9 +27,19 @@ PLACES = {
     "darmstadt-hbf": ("Darmstadt Hbf", 8.6297, 49.8725),
     "zeil": ("Zeil, Frankfurt", 8.6826, 50.1144),
     "hauptwache": ("Hauptwache, Frankfurt", 8.6787, 50.1140),
+    "tu-darmstadt": ("TU Darmstadt, Karolinenplatz", 8.6566, 49.8749),
+    "darmstadtium": ("darmstadtium congress centre, Darmstadt", 8.6587, 49.8745),
+    "staatstheater": ("Staatstheater Darmstadt", 8.6505, 49.8680),
+    "herrngarten": ("Herrngarten, Darmstadt", 8.6545, 49.8780),
+    "frankfurt-hbf": ("Frankfurt (Main) Hbf", 8.6631, 50.1069),
+    "roemer": ("Römer, Frankfurt", 8.6821, 50.1105),
+    "alte-oper": ("Alte Oper, Frankfurt", 8.6720, 50.1159),
+    "staedel": ("Städel Museum, Frankfurt", 8.6739, 50.1031),
+    "paulskirche": ("Paulskirche, Frankfurt", 8.6809, 50.1111),
 }
 MAX_STATION_WALK_M = 2500  # how far we look for a station to start from
 MAX_DESTINATION_WALK_M = 1200  # and how far from the destination we may get off
+MAX_OFF_MAP_M = 300  # a point farther than this from any mapped path is outside our map
 UNVERIFIED_PENALTY_MIN = 10  # prefer stations whose elevators we can check live
 BOARDING_BUFFER_MIN = 5  # time for lifts and finding the platform
 # Typical speeds on level ground; rough surfaces make the route costlier to choose, not this speed.
@@ -154,8 +164,36 @@ class Option:
 def place(text: str) -> tuple[str, float, float]:
     if text.lower() in PLACES:
         return PLACES[text.lower()]
-    lat, lon = (float(v) for v in text.split(","))
+    try:
+        lat, lon = (float(v) for v in text.split(","))
+    except ValueError:
+        raise SystemExit(f"unknown place '{text}': use one of {sorted(PLACES)} or 'lat,lon'") from None
     return text, lon, lat
+
+
+def check_on_map(network: routing.Network, name: str, point: tuple[float, float]) -> None:
+    """Stop when a point lies beyond the streets we have ingested, before any API call.
+
+    Without this, a far-away point would silently snap to the nearest mapped street.
+    """
+    dist = routing.distance_to_network_m(network, point)
+    if dist <= MAX_OFF_MAP_M:
+        return
+    lon, lat = point
+    hits = [key for key, (w, s, e, n) in AREAS.items() if w <= lon <= e and s <= lat <= n]
+    hits.sort(key=lambda k: (not k.endswith("-centre"), k))
+    if hits:
+        area = f"--area {hits[0]}"
+    else:
+        area = f"--area <name> (one of: {', '.join(sorted(AREAS))})"
+    log.error(
+        "%s is outside our map (nearest mapped path is %.0f m away). "
+        "Ingest that area first: python -m barrierfrei.ingest %s",
+        name,
+        dist,
+        area,
+    )
+    raise SystemExit(2)
 
 
 MAX_ELEVATOR_OFFSET_M = 500  # FaSta has a few bad coordinates; ignore positions this far from the station
@@ -543,6 +581,8 @@ def main() -> None:
     origin_name, *origin = place(args.origin)
     dest_name, *destination = place(args.destination)
     network = routing.load_network(store.connect(settings.db_path))
+    check_on_map(network, origin_name, tuple(origin))
+    check_on_map(network, dest_name, tuple(destination))
     options = plan(tuple(origin), tuple(destination), args.profile, network, provider, lookup)
 
     result = summary(options, args.profile)
