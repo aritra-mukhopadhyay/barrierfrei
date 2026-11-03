@@ -51,3 +51,10 @@ e.g. `BBOX=[8.628,49.869,8.653,49.876]`.
 ruff check . && ruff format --check .   # lint + formatting
 pytest -q                               # tests run offline, no keys or credits needed
 ```
+
+### Claude plans, Muse Code writes
+
+Code changes can be delegated to Meta's [Muse Code](https://dev.meta.ai/docs/muse-code) agent, so they
+run on Meta Model API credits, while Claude plans and reviews. See `CLAUDE.md` for the loop and
+`python tools/delegate.py --help` for the commands. Each task runs in its own git worktree under
+`../barrierfrei-tasks/`, with Muse Code's sandbox on, and nothing is committed until it is reviewed.

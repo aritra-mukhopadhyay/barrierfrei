@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # Secrets are SecretStr so they never show up in logs or tracebacks.
     model_api_key: SecretStr | None = None
+    meta_api_key: SecretStr | None = None  # Muse Code's name for the same key; wins if set
     mapillary_token: SecretStr | None = None
     db_client_id: SecretStr | None = None
     db_api_key: SecretStr | None = None
