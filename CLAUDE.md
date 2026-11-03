@@ -13,11 +13,11 @@ on their Meta Model API credits. For any task larger than a few lines:
    never in this checkout.
 3. Review `../barrierfrei-tasks/<slug>.diff` like a pull request from a junior colleague: correctness,
    tests that really test the change, no secrets, no scope creep, nothing that touches files or
-   the network outside the worktree. Only then run `python tools/delegate.py check <slug>`, since
+   the network outside the task folder. Only then run `python tools/delegate.py check <slug>`, since
    it executes the agent's tests outside the sandbox.
 4. If it needs changes: `python tools/delegate.py resume <slug> "<specific feedback>"`.
    After two failed rounds, fix it yourself and say so.
-5. When it is right, commit in the worktree, push `muse/<slug>` and open a PR that says Muse Code
+5. When it is right, commit in the task folder, push `muse/<slug>` and open a PR that says Muse Code
    wrote the code and Claude reviewed it.
 
 Small fixes (a typo, one line) are faster to do directly.

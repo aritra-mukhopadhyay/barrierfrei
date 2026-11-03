@@ -4,9 +4,9 @@ The split of work: Claude plans the change and writes it up as a task file (Mark
 (running Muse Spark on your Meta Model API credits) writes the code, and Claude reviews the diff
 before anything is committed. This script is the hand-off in the middle:
 
-  1. Creates an isolated git worktree on a new branch `muse/<slug>`, next to the repo in
+  1. Clones the repo (locally, fast) onto a new branch `muse/<slug>`, next to the repo in
      ../barrierfrei-tasks/<slug>, so the agent never touches your own checkout, .env or data/.
-  2. Runs `muse exec` headless in that worktree with the task, the repo rules from AGENTS.md
+  2. Runs `muse exec` headless in that clone with the task, the repo rules from AGENTS.md
      and a step cap. Muse Code's own guardrails stay on (OS sandbox + approval policy), so a
      risky command is refused rather than run. Every event is logged to <slug>.jsonl.
   3. Writes the full diff to <slug>.diff for review. The repo's checks (ruff, pytest) run
@@ -17,7 +17,7 @@ Usage (from the repo root, inside the venv):
   python tools/delegate.py run tasks/add-foo.md            # new task, slug from the file name
   python tools/delegate.py resume add-foo "Fix the failing test in test_plan.py"
   python tools/delegate.py check add-foo                   # after review: ruff + pytest
-  python tools/delegate.py clean add-foo                   # remove worktree and branch
+  python tools/delegate.py clean add-foo                   # remove the task's clone and logs
 
 Your key: MODEL_API_KEY from .env (or META_API_KEY from the environment) is passed to Muse Code
 as META_API_KEY. This script never prints it or writes it to a file.
@@ -45,6 +45,7 @@ from barrierfrei.config import Settings  # noqa: E402
 TASKS_DIR = REPO.parent / "barrierfrei-tasks"
 DEFAULT_MODEL = "muse-spark-1.3"  # Standard mode: Meta does not train on what we send.
 DEFAULT_MAX_STEPS = 60
+DEFAULT_TIMEOUT_MIN = 30  # a broken sandbox makes headless Muse Code wait forever instead of exiting
 SECRETS = ("MODEL_API_KEY", "META_API_KEY", "MAPILLARY_TOKEN", "DB_API_KEY", "DB_CLIENT_ID")
 SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 
@@ -55,10 +56,10 @@ Rules:
 - Do not commit, push, create branches, or edit files outside this directory.
 - Do not read, print, or create .env files or any secret. Tests must run without keys or network.
 - Keep the change as small as the task allows. Match the existing style; no drive-by refactors.
-- When done, run `python -m ruff check .`, `python -m ruff format .` and `python -m pytest -q`
-  from this directory and fix what fails.
-- Finish with a short summary: what you changed and why, what you ran and its result, and
-  anything you were unsure about or did not do.
+- Do not run ruff, pytest, git or other verification commands: the reviewer runs the checks
+  after reading your diff, and the sandbox can't run them anyway. Use your file tools only.
+- Finish with a short summary: what you changed and why, and anything you were unsure
+  about or did not do.
 
 Project rules (AGENTS.md):
 {agents_md}
@@ -87,6 +88,30 @@ def validate_slug(slug: str) -> None:
         sys.exit(f"Bad task name {slug!r}: use lowercase letters, digits and dashes (e.g. add-voice-input).")
 
 
+def create_workspace(slug: str, base_sha: str) -> None:
+    """Clone this repo into the task folder on a new branch `muse/<slug>` at base_sha.
+
+    A full local clone, not a `git worktree`: a worktree's .git points back into this repo, and
+    Muse Code's Windows sandbox then tries to change permissions inside our .git (and fails).
+    The clone has its own .git, shares objects via hardlinks, and pushes straight to GitHub.
+    """
+    wt = worktree(slug)
+    # core.autocrlf=false keeps the repo's LF endings in the clone: with Windows CRLF checkouts
+    # Muse's exact-match edits break on mixed line endings and it burns calls repairing them.
+    clone = ["git", "clone", "--quiet", "--no-checkout", "-c", "core.autocrlf=false", str(REPO), str(wt)]
+    subprocess.run(clone, check=True)
+    git("checkout", "--quiet", "-b", f"muse/{slug}", base_sha, cwd=wt)
+    origin = subprocess.run(["git", "remote", "get-url", "origin"], cwd=REPO, capture_output=True, text=True)
+    if origin.returncode == 0:
+        git("remote", "set-url", "origin", origin.stdout.strip(), cwd=wt)
+
+
+def _force_remove(func, path, _exc) -> None:
+    """rmtree helper: git marks object files read-only, which Windows refuses to delete."""
+    os.chmod(path, 0o700)
+    func(path)
+
+
 def worktree(slug: str) -> Path:
     return TASKS_DIR / slug
 
@@ -102,6 +127,9 @@ def find_session_id(log: Path) -> str | None:
 
     def walk(obj: object) -> str | None:
         if isinstance(obj, dict):
+            # Muse Code 1.4 names the session in its stream header: {"stream": {"kind": "session", "id": ...}}
+            if obj.get("kind") == "session" and isinstance(obj.get("id"), str):
+                return obj["id"]
             for key, value in obj.items():
                 if key in ("session_id", "sessionId") and isinstance(value, str):
                     return value
@@ -125,46 +153,92 @@ def find_session_id(log: Path) -> str | None:
     return None
 
 
-def run_muse(slug: str, prompt: str, model: str, max_steps: int, session: str | None) -> int:
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Terminate a process and all its descendants, then wait for it to exit."""
+    if sys.platform == "win32":
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], capture_output=True)
+    else:
+        import signal
+
+        os.killpg(proc.pid, signal.SIGKILL)  # start_new_session made it the group leader
+    proc.wait()
+
+
+def find_muse() -> str:
     muse = shutil.which("muse")
     if not muse:
         sys.exit("`muse` is not on PATH. Install Muse Code first (see the setup guide).")
+    return muse
+
+
+def sandbox_ready(muse: str) -> None:
+    """On Windows, stop early with the fix when Muse Code's sandbox was never set up."""
+    if sys.platform != "win32":
+        return
+    proc = subprocess.run([muse, "sandbox", "windows", "check"], capture_output=True, text=True)
+    if proc.returncode != 0:
+        sys.exit(
+            "Muse Code's Windows sandbox is not set up, so every agent command would fail.\n"
+            "Once, in PowerShell opened with 'Run as administrator':\n"
+            "  muse sandbox windows setup\n"
+            "  muse sandbox windows check    # should print status=ready\n\n" + proc.stdout.strip()
+        )
+
+
+def run_muse(
+    slug: str, prompt: str, model: str, max_steps: int, session: str | None, timeout_min: int
+) -> int:
+    muse = find_muse()
+    sandbox_ready(muse)
     prompt_file = TASKS_DIR / f"{slug}.prompt.md"
     prompt_file.write_text(prompt, encoding="utf-8")
     cmd = [muse, "exec", "--model", model, "--max-model-steps", str(max_steps), "--json"]
     cmd += ["--prompt-file", str(prompt_file)]
+    cmd += ["--no-foreign-personal-context"]  # don't load your personal Claude Code / Codex rules
     if session:
         cmd += ["--session-id", session]
     key = read_key()
     env = {k: v for k, v in os.environ.items() if k not in SECRETS}  # agent gets only its own key
     env["META_API_KEY"] = key
     log = TASKS_DIR / f"{slug}.jsonl"
-    print(f"Muse Code is working on '{slug}' (model {model}, at most {max_steps} steps)...")
-    with log.open("a", encoding="utf-8") as out:
-        proc = subprocess.run(cmd, cwd=worktree(slug), env=env, stdout=out, stderr=subprocess.STDOUT)
-    print(f"muse exec exited with {proc.returncode} (0 = the run finished, not that the work is right).")
-    return proc.returncode
+    errlog = TASKS_DIR / f"{slug}.stderr.log"  # kept apart so the .jsonl stays pure JSON events
+    print(f"Muse Code is working on '{slug}' ({model}, at most {max_steps} steps / {timeout_min} min)...")
+    with log.open("a", encoding="utf-8") as out, errlog.open("a", encoding="utf-8") as err:
+        # Own process group, so on timeout we can stop Muse Code *and* every tool it spawned
+        # before reading the diff; killing only the parent could leave children editing files.
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform == "win32" else {}
+        proc = subprocess.Popen(
+            cmd, cwd=worktree(slug), env=env, stdout=out, stderr=err, start_new_session=True, **group
+        )
+        try:
+            code = proc.wait(timeout=timeout_min * 60)
+        except subprocess.TimeoutExpired:
+            kill_tree(proc)
+            print(f"Stopped Muse Code after {timeout_min} min; see {errlog.name} and the end of {log.name}.")
+            return 124
+    print(f"muse exec exited with {code} (0 = the run finished, not that the work is right).")
+    return code
 
 
 def save_diff(slug: str) -> None:
-    """Write the worktree's full diff for review. Only git runs here, no agent-written code."""
+    """Write the task clone's full diff for review. Only git runs here, no agent-written code."""
     wt = worktree(slug)
     git("add", "-A", "--intent-to-add", cwd=wt)  # so new files show up in the diff
     (TASKS_DIR / f"{slug}.diff").write_text(git("diff", "HEAD", cwd=wt), encoding="utf-8")
     print("\n--- changed files")
     print(git("diff", "HEAD", "--stat", cwd=wt).strip() or "(no changes)")
     print(f"\nFull diff: {TASKS_DIR / f'{slug}.diff'}")
-    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'}")
+    print(f"Agent log: {TASKS_DIR / f'{slug}.jsonl'} (warnings: {slug}.stderr.log)")
 
 
 def check(slug: str) -> bool:
-    """Run the repo's checks in the worktree. Returns True when all pass.
+    """Run the repo's checks in the task clone. Returns True when all pass.
 
     This executes agent-written code (tests) on your machine outside Muse Code's sandbox, so
     `run` and `resume` never call it: read the diff first, then run `check` yourself.
     """
     wt = worktree(slug)
-    # Put the worktree first on the import path; otherwise an editable install of the main
+    # Put the task clone first on the import path; otherwise an editable install of the main
     # checkout would be imported and the tests would silently check the wrong code.
     env = {**os.environ, "PYTHONPATH": str(wt)}
     for secret in SECRETS:
@@ -189,15 +263,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     validate_slug(slug)
     if worktree(slug).exists():
         sys.exit(f"{worktree(slug)} already exists. Use `resume {slug} ...` or `clean {slug}` first.")
+    sandbox_ready(find_muse())  # before creating anything, so a failed preflight leaves no half task
     TASKS_DIR.mkdir(exist_ok=True)
     base = args.base or "HEAD"
-    git("worktree", "add", "-b", f"muse/{slug}", str(worktree(slug)), base)
+    create_workspace(slug, git("rev-parse", base).strip())
     agents = REPO / "AGENTS.md"
     prompt = PREAMBLE.format(
         agents_md=agents.read_text(encoding="utf-8") if agents.exists() else "(none)",
         task=task_file.read_text(encoding="utf-8"),
     )
-    code = run_muse(slug, prompt, args.model, args.max_steps, session=None)
+    code = run_muse(slug, prompt, args.model, args.max_steps, None, args.timeout)
     meta = {
         "slug": slug,
         "base": git("rev-parse", base).strip(),
@@ -217,7 +292,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
     session = args.session or meta.get("session")
     if not session:
         sys.exit(f"No session id found in {args.slug}.jsonl; pass one with --session.")
-    code = run_muse(args.slug, args.message, args.model or meta["model"], args.max_steps, session)
+    code = run_muse(
+        args.slug, args.message, args.model or meta["model"], args.max_steps, session, args.timeout
+    )
     save_diff(args.slug)
     print(f"\nReview the diff, then run checks: python tools/delegate.py check {args.slug}")
     return code
@@ -229,9 +306,8 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 def cmd_clean(args: argparse.Namespace) -> int:
     if worktree(args.slug).exists():
-        git("worktree", "remove", "--force", str(worktree(args.slug)))
-    subprocess.run(["git", "branch", "-D", f"muse/{args.slug}"], cwd=REPO, capture_output=True)
-    for suffix in (".json", ".jsonl", ".diff", ".prompt.md"):
+        shutil.rmtree(worktree(args.slug), onerror=_force_remove)
+    for suffix in (".json", ".jsonl", ".stderr.log", ".diff", ".prompt.md"):
         (TASKS_DIR / f"{args.slug}{suffix}").unlink(missing_ok=True)
     print(f"Removed task '{args.slug}'.")
     return 0
@@ -243,12 +319,13 @@ def main() -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("run", help="start a new task in its own worktree")
+    p = sub.add_parser("run", help="start a new task in its own clone")
     p.add_argument("task_file", help="Markdown file describing the task")
     p.add_argument("--slug", help="task name (default: the task file's name)")
     p.add_argument("--base", help="commit or branch to start from (default: HEAD)")
     p.add_argument("--model", default=DEFAULT_MODEL)
     p.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_MIN, help="minutes before giving up")
     p.set_defaults(func=cmd_run)
 
     p = sub.add_parser("resume", help="send review feedback to the same Muse Code session")
@@ -257,13 +334,14 @@ def main() -> int:
     p.add_argument("--session", help="override the session id read from the log")
     p.add_argument("--model")
     p.add_argument("--max-steps", type=int, default=DEFAULT_MAX_STEPS)
+    p.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_MIN, help="minutes before giving up")
     p.set_defaults(func=cmd_resume)
 
     p = sub.add_parser("check", help="re-run checks and refresh the diff")
     p.add_argument("slug")
     p.set_defaults(func=cmd_check)
 
-    p = sub.add_parser("clean", help="remove a task's worktree, branch and logs")
+    p = sub.add_parser("clean", help="remove a task's clone and logs")
     p.add_argument("slug")
     p.set_defaults(func=cmd_clean)
 
