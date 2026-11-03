@@ -1,4 +1,7 @@
+import pytest
+
 from barrierfrei import mapview, plan, stations, transit
+from barrierfrei.config import AREAS
 from barrierfrei.routing import Network, Segment
 
 ORIGIN = (8.6400, 49.8726)  # in Darmstadt, ~760 m east of the Hbf
@@ -490,3 +493,19 @@ def test_earliest_uses_entrance_doors_not_pin():
     assert len(options) == 1
     assert options[0].journey.rides[0].departure == late
     assert not any("train leaves before" in p for p in options[0].problems)
+
+
+def test_place_names_and_errors():
+    boxes = [AREAS["darmstadt-centre"], AREAS["frankfurt-centre"]]
+    for label, lon, lat in plan.PLACES.values():
+        assert any(w <= lon <= e and s <= lat <= n for w, s, e, n in boxes), label
+    assert plan.place("49.87,8.65") == ("49.87,8.65", 8.65, 49.87)
+    with pytest.raises(SystemExit, match="luisenplatz"):
+        plan.place("nowhere")
+
+
+def test_new_areas_contain_old_ones():
+    for old, new in (("darmstadt", "darmstadt-centre"), ("frankfurt", "frankfurt-centre")):
+        west, south, east, north = AREAS[old]
+        big_west, big_south, big_east, big_north = AREAS[new]
+        assert big_west <= west and big_south <= south and big_east >= east and big_north >= north

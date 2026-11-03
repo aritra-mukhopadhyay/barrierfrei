@@ -300,6 +300,13 @@ def covered(network: Network, point: tuple[float, float], radius_m: float = 200.
     return any(haversine_m(c, point) <= radius_m for c in network.node_coords.values())
 
 
+def distance_to_network_m(network: Network, point: tuple[float, float]) -> float:
+    """Distance in metres from (lon, lat) to the closest mapped node; inf when empty."""
+    if not network.node_coords:
+        return math.inf
+    return min(haversine_m(c, point) for c in network.node_coords.values())
+
+
 def avoided(network: Network, accessible: WalkRoute, direct: WalkRoute) -> list[str]:
     """What the plain shortest route would have crossed that the accessible one avoids."""
     profile = accessible.profile

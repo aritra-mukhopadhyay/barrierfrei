@@ -17,7 +17,7 @@ from pathlib import Path
 import requests
 
 from barrierfrei import routing, stations, store, transit
-from barrierfrei.config import get_settings, require
+from barrierfrei.config import AREAS, get_settings, require
 from barrierfrei.http import make_session
 
 log = logging.getLogger("barrierfrei.plan")
@@ -27,9 +27,19 @@ PLACES = {
     "darmstadt-hbf": ("Darmstadt Hbf", 8.6297, 49.8725),
     "zeil": ("Zeil, Frankfurt", 8.6826, 50.1144),
     "hauptwache": ("Hauptwache, Frankfurt", 8.6787, 50.1140),
+    "tu-darmstadt": ("TU Darmstadt, Karolinenplatz", 8.6566, 49.8749),
+    "mathildenhoehe": ("Mathildenhöhe, Darmstadt", 8.6668, 49.8770),
+    "staatstheater": ("Staatstheater Darmstadt", 8.6505, 49.8680),
+    "herrngarten": ("Herrngarten, Darmstadt", 8.6545, 49.8780),
+    "frankfurt-hbf": ("Frankfurt (Main) Hbf", 8.6631, 50.1069),
+    "roemer": ("Römer, Frankfurt", 8.6821, 50.1105),
+    "alte-oper": ("Alte Oper, Frankfurt", 8.6720, 50.1159),
+    "staedel": ("Städel Museum, Frankfurt", 8.6739, 50.1031),
+    "paulskirche": ("Paulskirche, Frankfurt", 8.6809, 50.1111),
 }
 MAX_STATION_WALK_M = 2500  # how far we look for a station to start from
 MAX_DESTINATION_WALK_M = 1200  # and how far from the destination we may get off
+MAX_OFF_MAP_M = 300  # a point farther than this from any mapped path is outside our map
 UNVERIFIED_PENALTY_MIN = 10  # prefer stations whose elevators we can check live
 BOARDING_BUFFER_MIN = 5  # time for lifts and finding the platform
 # Typical speeds on level ground; rough surfaces make the route costlier to choose, not this speed.
@@ -154,7 +164,10 @@ class Option:
 def place(text: str) -> tuple[str, float, float]:
     if text.lower() in PLACES:
         return PLACES[text.lower()]
-    lat, lon = (float(v) for v in text.split(","))
+    try:
+        lat, lon = (float(v) for v in text.split(","))
+    except ValueError:
+        raise SystemExit(f"unknown place '{text}': use one of {sorted(PLACES)} or 'lat,lon'") from None
     return text, lon, lat
 
 
@@ -542,6 +555,17 @@ def main() -> None:
     origin_name, *origin = place(args.origin)
     dest_name, *destination = place(args.destination)
     network = routing.load_network(store.connect(settings.db_path))
+    for name, point in ((origin_name, tuple(origin)), (dest_name, tuple(destination))):
+        dist = routing.distance_to_network_m(network, point)
+        if dist > MAX_OFF_MAP_M:
+            log.error(
+                "%s is outside our map (nearest mapped path is %.0f m away). "
+                "Ingest that area first: python -m barrierfrei.ingest --area %s",
+                name,
+                dist,
+                "/".join(sorted(AREAS)),
+            )
+            raise SystemExit(2)
     options = plan(tuple(origin), tuple(destination), args.profile, network, provider, lookup)
 
     result = summary(options, args.profile)
