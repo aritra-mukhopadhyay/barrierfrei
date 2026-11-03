@@ -233,17 +233,19 @@ def run_muse(
 def format_changed(slug: str) -> None:
     """Run `ruff format` on the Python files the agent touched (it can't run ruff in its sandbox).
 
-    Safe before review: ruff only parses and rewrites the files, it never executes them.
+    Safe before review: ruff only parses and rewrites the files, it never executes them. Python
+    runs in isolated mode (-I) so an agent-written ruff.py in the clone can't shadow the real
+    ruff, and without secrets in its environment.
     """
     wt = worktree(slug)
     git("add", "-A", "--intent-to-add", cwd=wt)
-    changed = [
-        f
-        for f in git("diff", "HEAD", "--name-only", "--diff-filter=d", cwd=wt).splitlines()
-        if f.endswith(".py")
-    ]
+    # -z: raw NUL-separated paths; otherwise git quotes non-ASCII names ("s\303\274d.py").
+    names = git("diff", "HEAD", "--name-only", "-z", "--diff-filter=d", cwd=wt).split("\0")
+    changed = [f for f in names if f.endswith(".py")]
     if changed:
-        subprocess.run([sys.executable, "-m", "ruff", "format", "--quiet", *changed], cwd=wt)
+        env = {k: v for k, v in os.environ.items() if k not in SECRETS}
+        cmd = [sys.executable, "-I", "-m", "ruff", "format", "--quiet", "--", *changed]
+        subprocess.run(cmd, cwd=wt, env=env)
 
 
 def save_diff(slug: str) -> None:
