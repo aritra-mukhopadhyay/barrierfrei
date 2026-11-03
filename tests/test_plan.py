@@ -195,11 +195,21 @@ def test_train_leaving_before_you_arrive_is_rejected():
     too_soon = plan.plan(
         ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
     )
-    assert not too_soon[0].usable and too_soon[0].problems
+    assert too_soon == []
     later = plan.plan(
         ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=30)), lookup_with(), now
     )
     assert later[0].usable
+
+
+def test_missed_train_is_not_offered():
+    from datetime import datetime, timedelta
+
+    now = datetime(2026, 10, 31, 12, 0).astimezone()
+    options = plan.plan(
+        ORIGIN, ZEIL, "wheelchair", network(), Timed(now + timedelta(minutes=2)), lookup_with(), now
+    )
+    assert options == []
 
 
 def test_walk_between_two_stations_is_checked():

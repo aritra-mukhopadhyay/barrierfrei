@@ -76,7 +76,7 @@ class Option:
     walk_end: routing.WalkRoute | None = None
     avoided: list[str] = field(default_factory=list)
     direct_walk: list[list[tuple[float, float]]] = field(default_factory=list)
-    problems: list[str] = field(default_factory=list)  # e.g. "train leaves before you reach the station"
+    problems: list[str] = field(default_factory=list)  # e.g. "no step-free walk found to the station"
     board_via: str = ""  # which station door the walks use
     alight_via: str = ""
     later: list[datetime] = field(default_factory=list)  # first-ride departures of same trips merged here
@@ -293,11 +293,20 @@ def plan(
 
     options = []
     for start in starts:
-        # Ask for trains we can actually catch. The walk always ends at an entrance door, so ask
-        # from the quickest door in; the pin only marks the area and would admit trains the real
-        # walk misses. The door we finally use depends on the platform, which we only learn from
-        # the journey, so a train that turns out too early is rejected below.
+        # Ask for trains we can actually catch. The walk may end at an entrance door or a street
+        # lift, and we only learn which from the journey, so ask from the quickest way in: this
+        # keeps the cutoff conservative and never hides a catchable train. A train the chosen
+        # door still misses is skipped below; the pin is only the last resort.
+        try:
+            lifts = station_lookup(start.fasta).elevators if start.fasta else []
+        except Exception:  # without live data the doors alone still give a cutoff
+            lifts = []
         doors_in = [((e.lon, e.lat), True, e.name) for e in start.entrances]
+        doors_in += [
+            ((lift.lon, lift.lat), True, lift.description or "the street lift")
+            for lift in lifts
+            if lift.lon is not None and lift.lat is not None
+        ]
         ways_in = doors_in or [((start.lon, start.lat), False, "")]
         quickest = [w for door in ways_in if (w := best_walk(network, graph, origin, [door], True))]
         approach = min((w[0] for w in quickest), key=walk_minutes, default=None)
@@ -351,7 +360,7 @@ def plan(
                 if departure and option.walk_start:
                     arrive = now + timedelta(minutes=walk_minutes(option.walk_start) + BOARDING_BUFFER_MIN)
                     if departure < arrive:
-                        option.problems.append("the train leaves before you can reach the platform")
+                        continue  # a train you cannot catch is not an option
                 options.append(option)
     return collapse(rank(options))
 
