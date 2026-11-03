@@ -1,3 +1,5 @@
+import pytest
+
 from barrierfrei import transit
 
 
@@ -312,6 +314,26 @@ def test_timetables_line_label_already_has_category():
     assert journey.legs[0].line == "S6"
 
 
+@pytest.mark.parametrize(
+    ("category", "mode"),
+    [
+        ("S", "suburban"),
+        ("RE", "regional"),
+        ("MEX", "regional"),
+        ("HLB", "regional"),
+        ("ICE", "national"),
+        ("FLX", "national"),
+    ],
+)
+def test_timetables_modes(category, mode):
+    darmstadt, taunusanlage, departure, origin_board, dest_board = _taunusanlage_trip()
+    origin_board = origin_board.replace('c="S"', f'c="{category}"')
+    dest_board = dest_board.replace('c="S"', f'c="{category}"')
+    provider = transit.DbTimetables(_TimetablesFake(origin_board, dest_board), "id", "key")
+    (journey,) = provider.journeys(darmstadt, taunusanlage, departure=departure)
+    assert journey.legs[0].mode == mode
+
+
 def test_static_lines_match_live_pattern():
     darmstadt = transit.find_stop("Darmstadt Hbf")
     for name in (
@@ -321,3 +343,13 @@ def test_static_lines_match_live_pattern():
     ):
         journeys = transit.Static().journeys(darmstadt, transit.find_stop(name))
         assert journeys[0].rides[0].line == "S6"
+
+
+def test_long_distance_journeys():
+    def journey(*modes):
+        legs = [transit.Leg(m, "x", "a", "b", None, None, None, None, 1) for m in modes]
+        return transit.Journey(legs, "test")
+
+    assert journey("national").long_distance
+    assert journey("nationalExpress").long_distance
+    assert not journey("suburban", "regional", "walk").long_distance
