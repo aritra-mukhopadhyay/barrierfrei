@@ -1,0 +1,198 @@
+{
+  "profile": "stroller",
+  "tickets": "regional",
+  "options": [
+    {
+      "usable": true,
+      "fully_verified": true,
+      "minutes": 89,
+      "long_distance": false,
+      "leave_at": "10:31",
+      "arrive_at": "12:01",
+      "later_departures": [
+        "11:35"
+      ],
+      "timetable": "DB Timetables (live)",
+      "rides": [
+        {
+          "line": "S6",
+          "from": "Darmstadt Hbf",
+          "to": "Frankfurt (Main) Taunusanlage",
+          "departure": "2026-11-04T11:05:00+01:00",
+          "arrival": "2026-11-04T11:42:00+01:00",
+          "minutes": 37
+        }
+      ],
+      "stations": [
+        {
+          "name": "Darmstadt Hbf",
+          "platform": "3",
+          "status": "ok",
+          "reason": "",
+          "role": "board",
+          "elevators_to_use": [
+            "zu Gleis 3/4"
+          ]
+        },
+        {
+          "name": "Frankfurt (Main) Taunusanlage",
+          "platform": "2",
+          "status": "ok",
+          "reason": "",
+          "role": "alight",
+          "elevators_to_use": [
+            "öffentl.Verkehrsraum<-> Gl.1/2"
+          ]
+        }
+      ],
+      "walk_to_station": {
+        "metres": 1964,
+        "minutes": 28,
+        "notes": [
+          "uneven surface",
+          "rough surface"
+        ],
+        "via": "zu Gleis 3/4"
+      },
+      "walk_from_station": {
+        "metres": 1359,
+        "minutes": 19,
+        "notes": [
+          "rough surface"
+        ],
+        "via": "öffentl.Verkehrsraum<-> Gl.1/2"
+      },
+      "transfer_walks": [],
+      "problems": [],
+      "avoided_on_shortest_path": [
+        "stairs"
+      ]
+    },
+    {
+      "usable": true,
+      "fully_verified": false,
+      "minutes": 71,
+      "long_distance": false,
+      "leave_at": "10:31",
+      "arrive_at": "11:43",
+      "later_departures": [
+        "11:35"
+      ],
+      "timetable": "DB Timetables (live)",
+      "rides": [
+        {
+          "line": "S6",
+          "from": "Darmstadt Hbf",
+          "to": "Frankfurt (Main) Konstablerwache",
+          "departure": "2026-11-04T11:05:00+01:00",
+          "arrival": "2026-11-04T11:38:00+01:00",
+          "minutes": 33
+        }
+      ],
+      "stations": [
+        {
+          "name": "Darmstadt Hbf",
+          "platform": "3",
+          "status": "ok",
+          "reason": "",
+          "role": "board",
+          "elevators_to_use": [
+            "zu Gleis 3/4"
+          ]
+        },
+        {
+          "name": "Frankfurt (Main) Konstablerwache",
+          "platform": "3",
+          "status": "unverified",
+          "reason": "DB lists only escalators here; the lifts are run by VGF and not in DB's live data.",
+          "role": "alight",
+          "elevators_to_use": []
+        }
+      ],
+      "walk_to_station": {
+        "metres": 1964,
+        "minutes": 28,
+        "notes": [
+          "uneven surface",
+          "rough surface"
+        ],
+        "via": "zu Gleis 3/4"
+      },
+      "walk_from_station": {
+        "metres": 381,
+        "minutes": 5,
+        "notes": [],
+        "via": "VGF street lift on the Zeil (exit 2)"
+      },
+      "transfer_walks": [],
+      "problems": [],
+      "avoided_on_shortest_path": []
+    },
+    {
+      "usable": true,
+      "fully_verified": false,
+      "minutes": 77,
+      "long_distance": false,
+      "leave_at": "10:31",
+      "arrive_at": "11:48",
+      "later_departures": [
+        "11:35"
+      ],
+      "timetable": "DB Timetables (live)",
+      "rides": [
+        {
+          "line": "S6",
+          "from": "Darmstadt Hbf",
+          "to": "Frankfurt (Main) Hauptwache",
+          "departure": "2026-11-04T11:05:00+01:00",
+          "arrival": "2026-11-04T11:40:00+01:00",
+          "minutes": 35
+        }
+      ],
+      "stations": [
+        {
+          "name": "Darmstadt Hbf",
+          "platform": "3",
+          "status": "ok",
+          "reason": "",
+          "role": "board",
+          "elevators_to_use": [
+            "zu Gleis 3/4"
+          ]
+        },
+        {
+          "name": "Frankfurt (Main) Hauptwache",
+          "platform": "3",
+          "status": "unverified",
+          "reason": "DB's lift links the S-Bahn platform to the concourse; the street lifts are run by VGF and not in DB's live data.",
+          "role": "alight",
+          "elevators_to_use": [
+            "zu Gleis 2/3 (S-Bahn)"
+          ]
+        }
+      ],
+      "walk_to_station": {
+        "metres": 1964,
+        "minutes": 28,
+        "notes": [
+          "uneven surface",
+          "rough surface"
+        ],
+        "via": "zu Gleis 3/4"
+      },
+      "walk_from_station": {
+        "metres": 609,
+        "minutes": 9,
+        "notes": [],
+        "via": "VGF street lift (exit 2)"
+      },
+      "transfer_walks": [],
+      "problems": [],
+      "avoided_on_shortest_path": [
+        "stairs"
+      ]
+    }
+  ],
+  "from": "Luisenplatz, Darmstadt",
+  "to": "Zeil, Frankfurt"
+}
