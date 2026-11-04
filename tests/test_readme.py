@@ -21,5 +21,5 @@ def test_readme_paths_exist():
 
 def test_readme_links_licence_and_video():
     assert "[LICENSE](LICENSE)" in README
-    assert "<!-- VIDEO_URL -->" in README or "Video" in README
+    assert "Video (3 min): https://youtu.be/" in README
     assert (ROOT / "LICENSE").read_text(encoding="utf-8").startswith("MIT License")
