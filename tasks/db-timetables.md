@@ -4,7 +4,7 @@
 `barrierfrei/plan.py` asks a transit provider (`barrierfrei/transit.py`) for journeys between
 two stops. Today the live provider is `DbRest` (the free db.transport.rest), which has been down
 for days, so `Auto` always falls back to `Static` (typical times, no real departures).
-Aritra has subscribed the DB API Marketplace app to DB's **Timetables** API (free plan,
+The project's DB API Marketplace app is subscribed to DB's **Timetables** API (free plan,
 60 calls/minute). The same credentials already used for FaSta work for it:
 `DB_CLIENT_ID` and `DB_API_KEY` in `Settings`, sent as the headers `DB-Client-Id` and `DB-Api-Key`
 (see `barrierfrei/stations.py` around line 93).

@@ -147,14 +147,15 @@ pytest -q                               # tests run offline: no network, no keys
 
 Rules for anyone (human or agent) changing the code are in [AGENTS.md](AGENTS.md): settings and
 secrets only through `config.py`, offline tests for every behaviour change, and safety-critical
-decisions in code rather than in a model.
+decisions in code rather than in a model. [CONTRIBUTING.md](CONTRIBUTING.md) covers pull requests.
 
 ### How it is built
 
 Each change starts as a short spec in `tasks/` (goal, files, exact behaviour, tests, out of scope).
 Meta's [Muse Code](https://dev.meta.ai/docs/muse-code) agent writes the code from the spec in its own
 sandboxed clone, Claude reviews the diff and runs the checks, and the change lands as a pull request.
-`python tools/delegate.py --help` shows the commands, and [CLAUDE.md](CLAUDE.md) describes the loop.
+`python tools/delegate.py --help` shows the commands, and [CONTRIBUTING.md](CONTRIBUTING.md#task-specs-and-delegated-changes)
+describes the loop.
 
 ## Roadmap
 

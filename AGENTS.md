@@ -1,6 +1,7 @@
 # Barrierefrei: rules for coding agents
 
-Step-free route agent for Darmstadt and Frankfurt (Meta Global AI Developer Hackathon). Python 3.11+.
+Step-free trip planner for Darmstadt and Frankfurt. Python 3.11+. These rules apply to human
+contributors too; the workflow for larger changes is in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 - Package code lives in `barrierfrei/`, tests in `tests/`, one-off key checks in `hello/`.
 - All settings and secrets go through `barrierfrei/config.py` (pydantic-settings, `SecretStr`).
@@ -9,5 +10,5 @@ Step-free route agent for Darmstadt and Frankfurt (Meta Global AI Developer Hack
   existing tests do. Add or update a test for every behaviour change.
 - Safety-critical facts (elevator status, steps on a route) are decided by code, not by a model.
 - Style: `ruff check .` and `ruff format .` must pass (line length 110). Small functions, type
-  hints, a docstring that says why when the why is not obvious. No new dependency without asking.
+  hints, a docstring that says why when the why is not obvious. No new dependency without a reason in the pull request.
 - Keep diffs focused on the task. Do not reformat or rename unrelated code.
