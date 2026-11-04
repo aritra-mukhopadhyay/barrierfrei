@@ -2,7 +2,7 @@
 
 ## Context
 Visitors need a link they can open without installing anything. A hosted live planner would need our
-DB and Meta keys on a server, so instead we compute a handful of demo trips live on the laptop and
+DB and Meta keys on a server, so instead we compute a handful of demo trips live on a local machine and
 publish the resulting map pages (the same pages `plan` writes) as a static site on GitHub Pages.
 Served over https, the pages send a Referer, so OpenStreetMap tiles load.
 
@@ -71,7 +71,7 @@ New `tests/test_site.py`, offline, reusing the fixtures/helpers style of `tests/
 
 ## Out of scope
 - Don't change routing, ranking, transit, stations, mapview rendering or serve.
-- No new dependencies. Do not generate or commit `site/` itself (the laptop will run it).
+- No new dependencies. Do not generate or commit `site/` itself (it is built locally, where the keys are).
 
 ## Done when
 - `python -m ruff check .`, `python -m ruff format --check .` and `python -m pytest -q` pass.
