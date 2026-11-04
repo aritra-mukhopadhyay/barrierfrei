@@ -3,8 +3,8 @@
 ## Context
 `python -m barrierfrei.plan` writes `data/plans/plan.html` and the user double-clicks it, so the
 browser opens it as `file://`. OpenStreetMap's tile servers require a Referer header and a page
-opened from a file sends none, so every tile is a 403 "Access blocked" image (seen on Aritra's
-laptop on 2026-11-03). CARTO now needs an API key, so switching providers is not an option. The fix
+opened from a file sends none, so every tile is a 403 "Access blocked" image (seen on
+2026-11-03). CARTO now needs an API key, so switching providers is not an option. The fix
 is to serve the page from `http://127.0.0.1`, which sends a normal Referer.
 
 ## Change

@@ -1,6 +1,6 @@
 # Barrierefrei: rules for coding agents
 
-Step-free route agent for Darmstadt and Frankfurt (Meta Global AI Developer Hackathon). Python 3.11+.
+Step-free trip planner for Darmstadt and Frankfurt. Python 3.11+.
 
 - Package code lives in `barrierfrei/`, tests in `tests/`, one-off key checks in `hello/`.
 - All settings and secrets go through `barrierfrei/config.py` (pydantic-settings, `SecretStr`).

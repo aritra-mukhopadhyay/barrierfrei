@@ -2,7 +2,7 @@
 
 ## Context
 The walking network covers two small boxes today (`AREAS` in `barrierfrei/config.py`): Darmstadt Hbf
-to Luisenplatz, and Frankfurt Hbf to the Zeil. The submission region is the S-Bahn corridor between
+to Luisenplatz, and Frankfurt Hbf to the Zeil. The demo region is the S-Bahn corridor between
 the two city centres: anywhere in central Darmstadt to anywhere in central Frankfurt. That needs
 bigger areas, more named places, and a clear error when a point lies outside the map (today a
 far-away point silently snaps to the nearest street we have).
