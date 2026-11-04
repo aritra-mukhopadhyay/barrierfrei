@@ -1,7 +1,7 @@
 # Build a static demo site of live trip plans for GitHub Pages
 
 ## Context
-For the hackathon submission, judges need a link they can open. A hosted live planner would need our
+Visitors need a link they can open without installing anything. A hosted live planner would need our
 DB and Meta keys on a server, so instead we compute a handful of demo trips live on the laptop and
 publish the resulting map pages (the same pages `plan` writes) as a static site on GitHub Pages.
 Served over https, the pages send a Referer, so OpenStreetMap tiles load.
