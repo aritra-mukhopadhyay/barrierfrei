@@ -9,7 +9,7 @@ It currently covers central Darmstadt and central Frankfurt am Main, connected b
 regional trains.
 
 - Demo site: https://aritra-mukhopadhyay.github.io/barrierfrei/ (trips computed live, then published)
-- Video (3 min): <!-- VIDEO_URL -->
+- Video (3 min): https://youtu.be/ByJOc3OE6lk
 
 ## Why
 
